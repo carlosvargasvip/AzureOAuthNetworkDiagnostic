@@ -574,6 +574,130 @@
     .env-grid { grid-template-columns: 1fr; }
     .detail-table td:first-child { width: 120px; }
   }
+
+  /* Raw Request/Response panels */
+  .raw-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent-cyan);
+    background: rgba(6, 182, 212, 0.08);
+    border: 1px solid rgba(6, 182, 212, 0.2);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+    margin-right: 8px;
+    margin-bottom: 8px;
+  }
+
+  .raw-toggle:hover {
+    background: rgba(6, 182, 212, 0.15);
+    border-color: rgba(6, 182, 212, 0.4);
+  }
+
+  .raw-toggle.active {
+    background: rgba(6, 182, 212, 0.15);
+    border-color: var(--accent-cyan);
+  }
+
+  .raw-panel {
+    display: none;
+    margin-top: 8px;
+    margin-bottom: 16px;
+  }
+
+  .raw-panel.open { display: block; }
+
+  .raw-block {
+    background: #080c14;
+    border: 1px solid rgba(30, 45, 74, 0.6);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 10px;
+  }
+
+  .raw-block-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    background: rgba(30, 45, 74, 0.3);
+    border-bottom: 1px solid rgba(30, 45, 74, 0.6);
+  }
+
+  .raw-block-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-muted);
+  }
+
+  .raw-block-label.req { color: var(--accent-blue); }
+  .raw-block-label.res { color: var(--accent-green); }
+  .raw-block-label.res-err { color: var(--accent-red); }
+
+  .raw-block-meta {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  .raw-block-body {
+    padding: 12px 14px;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.65;
+    color: #8b9dc3;
+    max-height: 500px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    tab-size: 2;
+  }
+
+  .raw-block-body .http-method { color: var(--accent-blue); font-weight: 700; }
+  .raw-block-body .http-url { color: var(--text-primary); }
+  .raw-block-body .http-version { color: var(--text-muted); }
+  .raw-block-body .http-status-ok { color: var(--accent-green); font-weight: 700; }
+  .raw-block-body .http-status-err { color: var(--accent-red); font-weight: 700; }
+  .raw-block-body .http-status-warn { color: var(--accent-yellow); font-weight: 700; }
+  .raw-block-body .header-name { color: var(--accent-cyan); }
+  .raw-block-body .header-value { color: #c4cfe0; }
+  .raw-block-body .body-separator { color: var(--text-muted); }
+  .raw-block-body .body-content { color: #7a8ba8; }
+  .raw-block-body .body-truncated { color: var(--accent-yellow); font-style: italic; }
+
+  .raw-copy-btn {
+    padding: 3px 10px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-muted);
+    background: rgba(30, 45, 74, 0.4);
+    border: 1px solid rgba(30, 45, 74, 0.6);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .raw-copy-btn:hover {
+    color: var(--text-primary);
+    background: rgba(30, 45, 74, 0.7);
+  }
+
+  .raw-toggles-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(30, 45, 74, 0.4);
+  }
 </style>
 </head>
 <body>
@@ -904,13 +1028,52 @@ async function testEndpoint(endpoint) {
     error: null,
     sslIssues: [],
     proxyIndicators: [],
-    details: {}
+    details: {},
+    raw: {
+      request: {
+        method: 'GET',
+        url: endpoint.url,
+        headers: {
+          'Accept': 'application/json, text/html, */*',
+          'X-Diagnostic-Request': 'azure-oauth-diag-v1',
+          'Cache-Control': 'no-store',
+          'Sec-Fetch-Mode': 'cors'
+        },
+        mode: 'cors',
+        redirect: 'follow',
+        cache: 'no-store',
+        timestamp: new Date().toISOString()
+      },
+      response: {
+        status: null,
+        statusText: null,
+        headers: {},
+        headersRaw: '',
+        body: null,
+        bodyTruncated: false,
+        bodyLength: 0,
+        type: null,
+        url: null,
+        redirected: false,
+        ok: null,
+        timestamp: null
+      },
+      noCors: null,
+      error: null,
+      timings: {
+        start: null,
+        headersReceived: null,
+        bodyReceived: null,
+        total: null
+      }
+    }
   };
 
   setStatus(endpoint.id, 'running', '●');
   log(`Testing: ${endpoint.url}`, 'info');
 
   const start = performance.now();
+  testResult.raw.timings.start = new Date().toISOString();
 
   try {
     const controller = new AbortController();
@@ -929,22 +1092,61 @@ async function testEndpoint(endpoint) {
     });
 
     clearTimeout(timeout);
-    const elapsed = performance.now() - start;
+    const headersTime = performance.now();
+    testResult.raw.timings.headersReceived = Math.round(headersTime - start);
+
+    const elapsed = headersTime - start;
     testResult.timing = Math.round(elapsed);
     testResult.httpStatus = response.status;
     testResult.httpStatusText = response.statusText;
     testResult.redirected = response.redirected;
     testResult.redirectURL = response.redirected ? response.url : null;
 
-    // Capture all response headers
+    // Capture raw response metadata
+    testResult.raw.response.status = response.status;
+    testResult.raw.response.statusText = response.statusText;
+    testResult.raw.response.type = response.type;
+    testResult.raw.response.url = response.url;
+    testResult.raw.response.redirected = response.redirected;
+    testResult.raw.response.ok = response.ok;
+
+    // Capture all response headers (both structured and raw string)
+    let headersRaw = '';
     response.headers.forEach((value, key) => {
       testResult.headers[key] = value;
+      testResult.raw.response.headers[key] = value;
+      headersRaw += `${key}: ${value}\n`;
+
       const kl = key.toLowerCase();
-      // Check for proxy indicators
-      if (kl.includes('proxy') || kl.includes('via') || kl.includes('x-forwarded') ||
-          kl.includes('x-cache') || kl.includes('x-real-ip') || kl.includes('x-bluecoat') ||
-          kl.includes('x-zscaler') || kl.includes('x-squid') || kl.includes('front-end-https') ||
-          kl.includes('x-firewall') || kl.includes('x-content-type-options') === false && kl.startsWith('x-')) {
+      // Check for proxy indicators — EXCLUDE standard Microsoft x-ms-* headers
+      const isProxyHeader = (
+        kl === 'via' ||
+        kl === 'x-forwarded-for' ||
+        kl === 'x-forwarded-host' ||
+        kl === 'x-forwarded-proto' ||
+        kl === 'x-real-ip' ||
+        kl === 'x-cache' ||
+        kl === 'x-cache-hit' ||
+        kl === 'x-cache-lookup' ||
+        kl.includes('x-bluecoat') ||
+        kl.includes('x-zscaler') ||
+        kl.includes('x-squid') ||
+        kl.includes('x-fortinet') ||
+        kl.includes('x-fortigate') ||
+        kl.includes('x-palo-alto') ||
+        kl.includes('x-barracuda') ||
+        kl.includes('x-sophos') ||
+        kl.includes('x-websense') ||
+        kl.includes('x-netskope') ||
+        kl.includes('x-mcafee') ||
+        kl.includes('x-symantec') ||
+        kl === 'front-end-https' ||
+        kl === 'x-proxy-id' ||
+        kl === 'x-authenticated-user' ||
+        (kl.startsWith('x-') && kl.includes('proxy')) ||
+        (kl.startsWith('x-') && kl.includes('firewall'))
+      );
+      if (isProxyHeader) {
         testResult.proxyIndicators.push({ header: key, value: value });
       }
       // Check for CORS
@@ -952,23 +1154,65 @@ async function testEndpoint(endpoint) {
         testResult.corsHeaders[key] = value;
       }
     });
+    testResult.raw.response.headersRaw = headersRaw;
 
     // Try to read body for additional info
     try {
       const text = await response.text();
+      const bodyTime = performance.now();
+      testResult.raw.timings.bodyReceived = Math.round(bodyTime - start);
+      testResult.raw.timings.total = Math.round(bodyTime - start);
+      testResult.raw.response.timestamp = new Date().toISOString();
+
       testResult.details.bodyLength = text.length;
       testResult.details.bodyPreview = text.substring(0, 500);
 
+      // Store full body (cap at 200KB for memory, truncate larger)
+      const MAX_RAW_BODY = 200000;
+      if (text.length <= MAX_RAW_BODY) {
+        testResult.raw.response.body = text;
+        testResult.raw.response.bodyTruncated = false;
+      } else {
+        testResult.raw.response.body = text.substring(0, MAX_RAW_BODY);
+        testResult.raw.response.bodyTruncated = true;
+      }
+      testResult.raw.response.bodyLength = text.length;
+
       // Check if body contains proxy/firewall block pages
+      // Only flag if body is small (block pages are typically <50KB) AND contains block indicators
+      // Large bodies (like Graph $metadata) are legitimate responses, not block pages
       const lower = text.toLowerCase();
-      if (lower.includes('blocked') || lower.includes('access denied') ||
-          lower.includes('firewall') || lower.includes('proxy') ||
-          lower.includes('websense') || lower.includes('fortigate') ||
-          lower.includes('palo alto') || lower.includes('bluecoat') ||
-          lower.includes('zscaler') || lower.includes('sophos') ||
-          lower.includes('barracuda') || lower.includes('content filtering')) {
-        testResult.sslIssues.push('Response body contains firewall/proxy block page indicators');
-        testResult.proxyIndicators.push({ header: 'body-content', value: 'Contains proxy/firewall keywords' });
+      const isSmallBody = text.length < 50000;
+      const isNotXmlMetadata = !lower.startsWith('<?xml') || !lower.includes('edmx:edmx');
+      const isNotJsonConfig = !lower.startsWith('{') || !(lower.includes('token_endpoint') || lower.includes('authorization_endpoint'));
+
+      if (isSmallBody && isNotXmlMetadata && isNotJsonConfig) {
+        const blockPagePatterns = [
+          /access\s+(denied|blocked|forbidden)/i,
+          /this\s+site\s+(is\s+)?blocked/i,
+          /web\s+filter/i,
+          /content\s+filtering/i,
+          /firewall\s+(has\s+)?blocked/i,
+          /request\s+(was\s+)?(blocked|denied)/i,
+          /security\s+policy\s+(violation|block)/i,
+          /websense/i,
+          /fortigate/i,
+          /fortiguard/i,
+          /palo\s*alto/i,
+          /bluecoat/i,
+          /zscaler/i,
+          /sophos\s+utm/i,
+          /barracuda/i,
+          /cisco\s+umbrella/i,
+          /url\s+categorization/i,
+          /this\s+page\s+has\s+been\s+blocked/i,
+          /your\s+(organization|administrator)\s+(has\s+)?(blocked|restricted)/i
+        ];
+        const matched = blockPagePatterns.filter(p => p.test(text));
+        if (matched.length > 0) {
+          testResult.sslIssues.push('Response body contains firewall/proxy block page indicators');
+          testResult.proxyIndicators.push({ header: 'body-content', value: `Block page detected (${matched.length} pattern matches)` });
+        }
       }
     } catch (bodyErr) {
       testResult.details.bodyError = bodyErr.message;
@@ -981,9 +1225,13 @@ async function testEndpoint(endpoint) {
         testResult.status = 'warn';
       }
     } else if (response.status === 401 || response.status === 403) {
-      // Expected for some endpoints without auth
-      testResult.status = endpoint.id === 'token-endpoint' || endpoint.id === 'authorize-endpoint' || endpoint.id === 'adminconsent' ? 'pass' : 'warn';
-      testResult.details.note = 'Auth error is expected for unauthenticated diagnostic requests';
+      // Expected for endpoints that require auth tokens - this proves the endpoint is reachable
+      testResult.status = 'pass';
+      testResult.details.note = 'Auth error (401/403) is expected for unauthenticated diagnostic requests — confirms endpoint is reachable';
+    } else if (response.status === 400) {
+      // Bad request can be expected when hitting endpoints without proper parameters
+      testResult.status = 'pass';
+      testResult.details.note = 'Bad request (400) is expected when hitting endpoints without required parameters — confirms endpoint is reachable';
     } else {
       testResult.status = 'fail';
     }
@@ -997,7 +1245,14 @@ async function testEndpoint(endpoint) {
   } catch (error) {
     const elapsed = performance.now() - start;
     testResult.timing = Math.round(elapsed);
+    testResult.raw.timings.total = Math.round(elapsed);
     testResult.error = error.message || error.toString();
+    testResult.raw.error = {
+      name: error.name,
+      message: error.message,
+      stack: error.stack ? error.stack.substring(0, 1000) : null,
+      timestamp: new Date().toISOString()
+    };
 
     if (error.name === 'AbortError') {
       testResult.status = 'fail';
@@ -1017,16 +1272,31 @@ async function testEndpoint(endpoint) {
   if (testResult.status === 'fail') {
     try {
       const start2 = performance.now();
-      await fetch(endpoint.url, { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(10000) });
+      const noCorsResp = await fetch(endpoint.url, { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(10000) });
       const elapsed2 = performance.now() - start2;
       testResult.details.noCorsReachable = true;
       testResult.details.noCorsTime = Math.round(elapsed2);
-      testResult.status = 'warn';
-      testResult.details.note = `CORS failed but endpoint reachable via no-cors (${Math.round(elapsed2)}ms). This is normal for some endpoints.`;
-      log(`  ↳ no-cors fallback OK for ${endpoint.name} (${Math.round(elapsed2)}ms)`, 'warn');
+      testResult.status = 'pass';
+      testResult.details.note = `Endpoint reachable (${Math.round(elapsed2)}ms). CORS restriction is normal — this endpoint is designed for server-side or redirect-based access, not direct browser calls.`;
+      testResult.raw.noCors = {
+        reachable: true,
+        timing: Math.round(elapsed2),
+        type: noCorsResp.type,
+        status: noCorsResp.status,
+        url: noCorsResp.url,
+        timestamp: new Date().toISOString(),
+        note: 'no-cors mode: browser blocks reading response details but confirms network reachability'
+      };
+      log(`  ↳ no-cors reachable for ${endpoint.name} (${Math.round(elapsed2)}ms) — CORS restriction is expected`, 'pass');
     } catch (e2) {
       testResult.details.noCorsReachable = false;
       testResult.details.noCorsError = e2.message;
+      testResult.raw.noCors = {
+        reachable: false,
+        error: e2.message,
+        errorName: e2.name,
+        timestamp: new Date().toISOString()
+      };
       log(`  ↳ no-cors also failed for ${endpoint.name}: ${e2.message}`, 'fail');
     }
   }
@@ -1047,6 +1317,184 @@ async function testEndpoint(endpoint) {
   return testResult;
 }
 
+function escHtml(str) {
+  if (str == null) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function formatRawRequest(raw) {
+  const r = raw.request;
+  let out = '';
+  out += `<span class="http-method">${r.method}</span> <span class="http-url">${escHtml(r.url)}</span> <span class="http-version">HTTP/1.1</span>\n`;
+  // Extract hostname for Host header
+  try {
+    const host = new URL(r.url).host;
+    out += `<span class="header-name">Host:</span> <span class="header-value">${escHtml(host)}</span>\n`;
+  } catch(e) {}
+  for (const [k, v] of Object.entries(r.headers)) {
+    out += `<span class="header-name">${escHtml(k)}:</span> <span class="header-value">${escHtml(v)}</span>\n`;
+  }
+  out += `<span class="header-name">Mode:</span> <span class="header-value">${r.mode}</span>\n`;
+  out += `<span class="header-name">Redirect:</span> <span class="header-value">${r.redirect}</span>\n`;
+  out += `<span class="header-name">Cache:</span> <span class="header-value">${r.cache}</span>\n`;
+  out += `\n<span class="body-separator">--- Timestamp: ${r.timestamp} ---</span>`;
+  return out;
+}
+
+function formatRawResponse(raw) {
+  const r = raw.response;
+  let out = '';
+
+  if (r.status !== null) {
+    const statusCls = r.status >= 200 && r.status < 300 ? 'http-status-ok' :
+                      r.status >= 300 && r.status < 400 ? 'http-status-warn' : 'http-status-err';
+    out += `<span class="http-version">HTTP/1.1</span> <span class="${statusCls}">${r.status} ${escHtml(r.statusText || '')}</span>\n`;
+    out += `<span class="header-name">Response-Type:</span> <span class="header-value">${r.type || 'N/A'}</span>\n`;
+    out += `<span class="header-name">Response-URL:</span> <span class="header-value">${escHtml(r.url || 'N/A')}</span>\n`;
+    out += `<span class="header-name">Redirected:</span> <span class="header-value">${r.redirected}</span>\n`;
+    out += `<span class="header-name">OK:</span> <span class="header-value">${r.ok}</span>\n`;
+
+    // Headers
+    for (const [k, v] of Object.entries(r.headers)) {
+      out += `<span class="header-name">${escHtml(k)}:</span> <span class="header-value">${escHtml(v)}</span>\n`;
+    }
+
+    // Body
+    out += `\n<span class="body-separator">--- Response Body (${r.bodyLength ? r.bodyLength.toLocaleString() + ' bytes' : 'empty'}) ---</span>\n`;
+    if (r.body) {
+      // Try to pretty-print JSON
+      let bodyDisplay = r.body;
+      if (r.body.trim().startsWith('{') || r.body.trim().startsWith('[')) {
+        try {
+          bodyDisplay = JSON.stringify(JSON.parse(r.body), null, 2);
+        } catch(e) { /* not valid JSON, show raw */ }
+      }
+      out += `<span class="body-content">${escHtml(bodyDisplay)}</span>`;
+      if (r.bodyTruncated) {
+        out += `\n<span class="body-truncated">... [TRUNCATED — original ${r.bodyLength.toLocaleString()} bytes, showing first 200KB] ...</span>`;
+      }
+    } else {
+      out += `<span class="body-content">[No body captured — CORS or network error prevented reading]</span>`;
+    }
+  } else {
+    // No response — show error
+    out += `<span class="http-status-err">NO RESPONSE RECEIVED</span>\n`;
+    if (raw.error) {
+      out += `<span class="header-name">Error-Name:</span> <span class="header-value">${escHtml(raw.error.name)}</span>\n`;
+      out += `<span class="header-name">Error-Message:</span> <span class="header-value">${escHtml(raw.error.message)}</span>\n`;
+      if (raw.error.stack) {
+        out += `\n<span class="body-separator">--- Stack Trace ---</span>\n`;
+        out += `<span class="body-content">${escHtml(raw.error.stack)}</span>`;
+      }
+    }
+  }
+
+  // Timing info
+  const t = raw.timings;
+  out += `\n\n<span class="body-separator">--- Timing ---</span>\n`;
+  out += `<span class="header-name">Start:</span> <span class="header-value">${t.start || 'N/A'}</span>\n`;
+  out += `<span class="header-name">Headers-Received:</span> <span class="header-value">${t.headersReceived != null ? t.headersReceived + 'ms' : 'N/A'}</span>\n`;
+  out += `<span class="header-name">Body-Received:</span> <span class="header-value">${t.bodyReceived != null ? t.bodyReceived + 'ms' : 'N/A'}</span>\n`;
+  out += `<span class="header-name">Total:</span> <span class="header-value">${t.total != null ? t.total + 'ms' : 'N/A'}</span>\n`;
+  if (r.timestamp) {
+    out += `<span class="header-name">End:</span> <span class="header-value">${r.timestamp}</span>`;
+  }
+
+  return out;
+}
+
+function formatRawNoCors(noCors) {
+  if (!noCors) return '';
+  let out = '';
+  if (noCors.reachable) {
+    out += `<span class="http-status-ok">REACHABLE via no-cors</span>\n`;
+    out += `<span class="header-name">Response-Type:</span> <span class="header-value">${noCors.type || 'opaque'}</span>\n`;
+    out += `<span class="header-name">Status:</span> <span class="header-value">${noCors.status} (opaque — actual status hidden by browser)</span>\n`;
+    out += `<span class="header-name">URL:</span> <span class="header-value">${escHtml(noCors.url || 'N/A')}</span>\n`;
+    out += `<span class="header-name">Timing:</span> <span class="header-value">${noCors.timing}ms</span>\n`;
+    out += `<span class="header-name">Timestamp:</span> <span class="header-value">${noCors.timestamp}</span>\n`;
+    out += `\n<span class="body-separator">--- Note ---</span>\n`;
+    out += `<span class="body-content">${escHtml(noCors.note)}</span>`;
+  } else {
+    out += `<span class="http-status-err">NOT REACHABLE (no-cors also failed)</span>\n`;
+    out += `<span class="header-name">Error:</span> <span class="header-value">${escHtml(noCors.error)}</span>\n`;
+    out += `<span class="header-name">Error-Name:</span> <span class="header-value">${escHtml(noCors.errorName)}</span>\n`;
+    out += `<span class="header-name">Timestamp:</span> <span class="header-value">${noCors.timestamp}</span>`;
+  }
+  return out;
+}
+
+function getRawPlainText(raw) {
+  // Generate plain text version for copy-to-clipboard
+  let out = '';
+  const r = raw.request;
+  out += `=== REQUEST ===\n`;
+  out += `${r.method} ${r.url} HTTP/1.1\n`;
+  try { out += `Host: ${new URL(r.url).host}\n`; } catch(e) {}
+  for (const [k, v] of Object.entries(r.headers)) { out += `${k}: ${v}\n`; }
+  out += `Mode: ${r.mode}\nRedirect: ${r.redirect}\nCache: ${r.cache}\n`;
+  out += `Timestamp: ${r.timestamp}\n`;
+
+  out += `\n=== RESPONSE ===\n`;
+  const res = raw.response;
+  if (res.status !== null) {
+    out += `HTTP/1.1 ${res.status} ${res.statusText || ''}\n`;
+    out += `Response-Type: ${res.type || 'N/A'}\nResponse-URL: ${res.url || 'N/A'}\n`;
+    out += `Redirected: ${res.redirected}\nOK: ${res.ok}\n`;
+    for (const [k, v] of Object.entries(res.headers)) { out += `${k}: ${v}\n`; }
+    out += `\n--- Body (${res.bodyLength ? res.bodyLength.toLocaleString() + ' bytes' : 'empty'}) ---\n`;
+    if (res.body) {
+      let bodyText = res.body;
+      try { bodyText = JSON.stringify(JSON.parse(res.body), null, 2); } catch(e) {}
+      out += bodyText;
+      if (res.bodyTruncated) out += `\n... [TRUNCATED — original ${res.bodyLength.toLocaleString()} bytes] ...`;
+    } else {
+      out += `[No body captured]`;
+    }
+  } else {
+    out += `NO RESPONSE RECEIVED\n`;
+    if (raw.error) {
+      out += `Error: ${raw.error.name}: ${raw.error.message}\n`;
+      if (raw.error.stack) out += `Stack: ${raw.error.stack}\n`;
+    }
+  }
+
+  out += `\n\n=== TIMING ===\n`;
+  const t = raw.timings;
+  out += `Start: ${t.start || 'N/A'}\nHeaders: ${t.headersReceived != null ? t.headersReceived + 'ms' : 'N/A'}\n`;
+  out += `Body: ${t.bodyReceived != null ? t.bodyReceived + 'ms' : 'N/A'}\nTotal: ${t.total != null ? t.total + 'ms' : 'N/A'}\n`;
+
+  if (raw.noCors) {
+    out += `\n=== NO-CORS FALLBACK ===\n`;
+    if (raw.noCors.reachable) {
+      out += `Reachable: true\nType: ${raw.noCors.type}\nTiming: ${raw.noCors.timing}ms\n`;
+    } else {
+      out += `Reachable: false\nError: ${raw.noCors.error}\n`;
+    }
+  }
+
+  return out;
+}
+
+function copyRawData(id) {
+  const testResult = RESULTS.tests.find(t => t.id === id);
+  if (!testResult) return;
+  const text = getRawPlainText(testResult.raw);
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById(`copy-raw-${id}`);
+    if (btn) { const o = btn.textContent; btn.textContent = '✓ Copied'; setTimeout(() => btn.textContent = o, 1500); }
+  });
+}
+
+function toggleRawPanel(id, panel) {
+  const el = document.getElementById(`raw-${panel}-${id}`);
+  const btn = document.getElementById(`btn-raw-${panel}-${id}`);
+  if (el) {
+    el.classList.toggle('open');
+    if (btn) btn.classList.toggle('active');
+  }
+}
+
 function renderTestDetails(id, result) {
   let html = '';
 
@@ -1054,13 +1502,15 @@ function renderTestDetails(id, result) {
   html += `<div class="detail-group">
     <div class="detail-group-title">Connection Details</div>
     <table class="detail-table">
-      <tr><td>URL</td><td>${result.url}</td></tr>
-      <tr><td>Status</td><td><span class="tag tag-${result.status}">${result.status}</span> ${result.httpStatus ? `HTTP ${result.httpStatus} ${result.httpStatusText}` : result.error || ''}</td></tr>
+      <tr><td>URL</td><td>${escHtml(result.url)}</td></tr>
+      <tr><td>Status</td><td><span class="tag tag-${result.status}">${result.status}</span> ${result.httpStatus ? `HTTP ${result.httpStatus} ${escHtml(result.httpStatusText)}` : escHtml(result.error) || ''}</td></tr>
       <tr><td>Response Time</td><td>${result.timing}ms ${result.timing > 3000 ? '<span class="tag tag-warn">SLOW</span>' : ''}</td></tr>
-      <tr><td>Redirected</td><td>${result.redirected ? `Yes → ${result.redirectURL}` : 'No'}</td></tr>
-      ${result.details.noCorsReachable !== undefined ? `<tr><td>No-CORS Reachable</td><td>${result.details.noCorsReachable ? 'Yes (' + result.details.noCorsTime + 'ms)' : 'No — ' + (result.details.noCorsError || '')}</td></tr>` : ''}
-      ${result.details.note ? `<tr><td>Note</td><td>${result.details.note}</td></tr>` : ''}
-      ${result.details.bodyLength !== undefined ? `<tr><td>Body Length</td><td>${result.details.bodyLength} bytes</td></tr>` : ''}
+      <tr><td>Redirected</td><td>${result.redirected ? `Yes → ${escHtml(result.redirectURL)}` : 'No'}</td></tr>
+      ${result.details.noCorsReachable !== undefined ? `<tr><td>No-CORS Reachable</td><td>${result.details.noCorsReachable ? 'Yes (' + result.details.noCorsTime + 'ms)' : 'No — ' + escHtml(result.details.noCorsError || '')}</td></tr>` : ''}
+      ${result.details.note ? `<tr><td>Note</td><td>${escHtml(result.details.note)}</td></tr>` : ''}
+      ${result.details.bodyLength !== undefined ? `<tr><td>Body Length</td><td>${result.details.bodyLength.toLocaleString()} bytes</td></tr>` : ''}
+      ${result.raw.timings.headersReceived != null ? `<tr><td>Time to Headers</td><td>${result.raw.timings.headersReceived}ms</td></tr>` : ''}
+      ${result.raw.timings.bodyReceived != null ? `<tr><td>Time to Body</td><td>${result.raw.timings.bodyReceived}ms</td></tr>` : ''}
     </table>
   </div>`;
 
@@ -1072,7 +1522,7 @@ function renderTestDetails(id, result) {
       <table class="detail-table">`;
     for (const [k, v] of Object.entries(result.headers)) {
       const isProxy = result.proxyIndicators.some(p => p.header === k);
-      html += `<tr><td>${k} ${isProxy ? '<span class="tag tag-warn">PROXY</span>' : ''}</td><td>${v}</td></tr>`;
+      html += `<tr><td>${escHtml(k)} ${isProxy ? '<span class="tag tag-warn">PROXY</span>' : ''}</td><td>${escHtml(v)}</td></tr>`;
     }
     html += `</table></div>`;
   }
@@ -1083,7 +1533,7 @@ function renderTestDetails(id, result) {
       <div class="detail-group-title">⚠ Proxy / Firewall Indicators</div>
       <table class="detail-table">`;
     for (const p of result.proxyIndicators) {
-      html += `<tr><td>${p.header}</td><td>${p.value}</td></tr>`;
+      html += `<tr><td>${escHtml(p.header)}</td><td>${escHtml(p.value)}</td></tr>`;
     }
     html += `</table></div>`;
   }
@@ -1094,7 +1544,7 @@ function renderTestDetails(id, result) {
       <div class="detail-group-title">⚠ SSL / TLS Observations</div>
       <table class="detail-table">`;
     for (const issue of result.sslIssues) {
-      html += `<tr><td colspan="2">${issue}</td></tr>`;
+      html += `<tr><td colspan="2">${escHtml(issue)}</td></tr>`;
     }
     html += `</table></div>`;
   }
@@ -1107,14 +1557,59 @@ function renderTestDetails(id, result) {
         html += `<div class="detail-group">
           <div class="detail-group-title">OpenID Configuration (Verified)</div>
           <table class="detail-table">
-            ${json.issuer ? `<tr><td>Issuer</td><td>${json.issuer}</td></tr>` : ''}
-            ${json.token_endpoint ? `<tr><td>Token Endpoint</td><td>${json.token_endpoint}</td></tr>` : ''}
-            ${json.authorization_endpoint ? `<tr><td>Authorize Endpoint</td><td>${json.authorization_endpoint}</td></tr>` : ''}
-            ${json.device_authorization_endpoint ? `<tr><td>Device Auth Endpoint</td><td>${json.device_authorization_endpoint}</td></tr>` : ''}
+            ${json.issuer ? `<tr><td>Issuer</td><td>${escHtml(json.issuer)}</td></tr>` : ''}
+            ${json.token_endpoint ? `<tr><td>Token Endpoint</td><td>${escHtml(json.token_endpoint)}</td></tr>` : ''}
+            ${json.authorization_endpoint ? `<tr><td>Authorize Endpoint</td><td>${escHtml(json.authorization_endpoint)}</td></tr>` : ''}
+            ${json.device_authorization_endpoint ? `<tr><td>Device Auth Endpoint</td><td>${escHtml(json.device_authorization_endpoint)}</td></tr>` : ''}
           </table>
         </div>`;
       }
     } catch (e) {}
+  }
+
+  // Raw Request/Response toggle buttons
+  html += `<div class="raw-toggles-bar">
+    <button class="raw-toggle" id="btn-raw-req-${id}" onclick="toggleRawPanel('${id}', 'req')">▸ Raw Request</button>
+    <button class="raw-toggle" id="btn-raw-res-${id}" onclick="toggleRawPanel('${id}', 'res')">▸ Raw Response</button>
+    ${result.raw.noCors ? `<button class="raw-toggle" id="btn-raw-nocors-${id}" onclick="toggleRawPanel('${id}', 'nocors')">▸ No-CORS Fallback</button>` : ''}
+    <button class="raw-copy-btn" id="copy-raw-${id}" onclick="copyRawData('${id}')">⎘ Copy All Raw Data</button>
+  </div>`;
+
+  // Raw Request panel
+  html += `<div class="raw-panel" id="raw-req-${id}">
+    <div class="raw-block">
+      <div class="raw-block-header">
+        <span class="raw-block-label req">⬆ REQUEST</span>
+        <span class="raw-block-meta">${escHtml(result.raw.request.method)} · ${escHtml(result.raw.request.timestamp)}</span>
+      </div>
+      <div class="raw-block-body">${formatRawRequest(result.raw)}</div>
+    </div>
+  </div>`;
+
+  // Raw Response panel
+  const resLabel = result.raw.response.status !== null ?
+    (result.raw.response.ok ? 'res' : 'res-err') : 'res-err';
+  html += `<div class="raw-panel" id="raw-res-${id}">
+    <div class="raw-block">
+      <div class="raw-block-header">
+        <span class="raw-block-label ${resLabel}">⬇ RESPONSE</span>
+        <span class="raw-block-meta">${result.raw.response.status !== null ? `HTTP ${result.raw.response.status}` : 'ERROR'} · ${result.raw.response.bodyLength ? result.raw.response.bodyLength.toLocaleString() + ' bytes' : 'no body'}</span>
+      </div>
+      <div class="raw-block-body">${formatRawResponse(result.raw)}</div>
+    </div>
+  </div>`;
+
+  // No-CORS fallback panel
+  if (result.raw.noCors) {
+    html += `<div class="raw-panel" id="raw-nocors-${id}">
+      <div class="raw-block">
+        <div class="raw-block-header">
+          <span class="raw-block-label ${result.raw.noCors.reachable ? 'res' : 'res-err'}">⬇ NO-CORS FALLBACK</span>
+          <span class="raw-block-meta">${result.raw.noCors.reachable ? 'Reachable · ' + result.raw.noCors.timing + 'ms' : 'Failed'}</span>
+        </div>
+        <div class="raw-block-body">${formatRawNoCors(result.raw.noCors)}</div>
+      </div>
+    </div>`;
   }
 
   document.getElementById(`details-${id}`).innerHTML = html;
@@ -1369,22 +1864,22 @@ function generateFindings() {
     });
   }
 
-  // Check for CORS issues
-  const corsIssues = tests.filter(t => t.status === 'fail' && t.details.noCorsReachable === true);
-  if (corsIssues.length > 0) {
+  // Check for CORS-only issues (endpoint reachable but CORS blocked = normal)
+  const corsOnly = tests.filter(t => t.status === 'pass' && t.details.noCorsReachable === true);
+  if (corsOnly.length > 0) {
     findings.push({
       type: 'info',
-      title: 'CORS Restrictions (Expected)',
-      msg: `${corsIssues.length} endpoint(s) are reachable but block browser CORS requests. This is normal behavior for some Microsoft endpoints and not a network issue.`
+      title: 'CORS Restrictions (Normal Behavior)',
+      msg: `${corsOnly.length} endpoint(s) block direct browser CORS requests but are fully reachable. This is expected — OAuth endpoints (token, authorize, admin consent) use server-side calls and browser redirects, not direct AJAX requests. No action needed.`
     });
   }
 
   // All pass
-  if (failCount === 0 && findings.length === 0) {
+  if (failCount === 0 && !findings.some(f => f.type === 'critical')) {
     findings.push({
       type: 'info',
-      title: 'All Endpoints Accessible',
-      msg: 'All Microsoft authentication and API endpoints are reachable from this network. If the OAuth admin consent flow is still failing, the issue may be in Azure AD configuration (Conditional Access policies, Security Defaults, or Protected Actions) rather than network-level blocking.'
+      title: '✓ Network Path is Clean',
+      msg: 'All Microsoft authentication and API endpoints are reachable from this network with no proxy/firewall interference detected. No SSL inspection detected. If the OAuth admin consent flow is still failing from this network, the issue is likely in Azure AD configuration (Conditional Access policies, Security Defaults, Protected Actions, or device compliance requirements) rather than network-level blocking. Run this same test from the OTHER network to compare results.'
     });
   }
 
@@ -1566,6 +2061,61 @@ function generateTextReport() {
         report += `      ${k}: ${v}\n`;
       }
     }
+
+    // Raw Request/Response
+    if (t.raw) {
+      report += `\n    ── RAW REQUEST ──\n`;
+      report += `    ${t.raw.request.method} ${t.raw.request.url} HTTP/1.1\n`;
+      try { report += `    Host: ${new URL(t.raw.request.url).host}\n`; } catch(e) {}
+      for (const [k, v] of Object.entries(t.raw.request.headers)) {
+        report += `    ${k}: ${v}\n`;
+      }
+      report += `    Mode: ${t.raw.request.mode} | Redirect: ${t.raw.request.redirect} | Cache: ${t.raw.request.cache}\n`;
+      report += `    Timestamp: ${t.raw.request.timestamp}\n`;
+
+      report += `\n    ── RAW RESPONSE ──\n`;
+      const res = t.raw.response;
+      if (res.status !== null) {
+        report += `    HTTP/1.1 ${res.status} ${res.statusText || ''}\n`;
+        report += `    Response-Type: ${res.type || 'N/A'} | Response-URL: ${res.url || 'N/A'}\n`;
+        report += `    Redirected: ${res.redirected} | OK: ${res.ok}\n`;
+        for (const [k, v] of Object.entries(res.headers)) {
+          report += `    ${k}: ${v}\n`;
+        }
+        report += `\n    --- Body (${res.bodyLength ? res.bodyLength.toLocaleString() + ' bytes' : 'empty'}) ---\n`;
+        if (res.body) {
+          let bodyText = res.body;
+          try { bodyText = JSON.stringify(JSON.parse(res.body), null, 2); } catch(e) {}
+          if (bodyText.length > 5000) {
+            report += `    ${bodyText.substring(0, 5000).split('\n').join('\n    ')}\n    ... [TRUNCATED in text report — ${res.bodyLength.toLocaleString()} bytes total, full data in JSON export] ...\n`;
+          } else {
+            report += `    ${bodyText.split('\n').join('\n    ')}\n`;
+          }
+        } else {
+          report += `    [No body captured]\n`;
+        }
+      } else {
+        report += `    NO RESPONSE RECEIVED\n`;
+        if (t.raw.error) {
+          report += `    Error: ${t.raw.error.name}: ${t.raw.error.message}\n`;
+        }
+      }
+
+      report += `\n    ── TIMING ──\n`;
+      const tm = t.raw.timings;
+      report += `    Start: ${tm.start || 'N/A'} | Headers: ${tm.headersReceived != null ? tm.headersReceived + 'ms' : 'N/A'} | Body: ${tm.bodyReceived != null ? tm.bodyReceived + 'ms' : 'N/A'} | Total: ${tm.total != null ? tm.total + 'ms' : 'N/A'}\n`;
+
+      if (t.raw.noCors) {
+        report += `\n    ── NO-CORS FALLBACK ──\n`;
+        if (t.raw.noCors.reachable) {
+          report += `    Reachable: true | Type: ${t.raw.noCors.type} | Timing: ${t.raw.noCors.timing}ms\n`;
+        } else {
+          report += `    Reachable: false | Error: ${t.raw.noCors.error}\n`;
+        }
+      }
+    }
+
+    report += `\n    ─────────────────────────────────────────────────\n`;
   }
 
   report += '\n── FINDINGS ────────────────────────────────────────────\n';
