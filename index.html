@@ -1740,6 +1740,475 @@ async function detectProxyConfiguration() {
   }
 
   // ═══════════════════════════════════════════════════════
+  // CHECK 10: TLS Fingerprint via External Service
+  // MITM proxies re-terminate TLS, changing the client hello fingerprint.
+  // An external service sees the proxy's TLS, not the browser's.
+  // ═══════════════════════════════════════════════════════
+  try {
+    log('  Checking TLS fingerprint via external service...', 'info');
+    const tlsResp = await fetch('https://www.howsmyssl.com/a/check', {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(8000)
+    });
+
+    if (tlsResp.ok) {
+      const tlsData = await tlsResp.json();
+      const issues = [];
+      let detail = '';
+
+      detail += `TLS Version: ${tlsData.tls_version || 'unknown'}\n`;
+      detail += `Rating: ${tlsData.rating || 'unknown'}\n`;
+      detail += `Ephemeral Keys Supported: ${tlsData.ephemeral_keys_supported}\n`;
+      detail += `Session Ticket Supported: ${tlsData.session_ticket_supported}\n`;
+      detail += `TLS Compression: ${tlsData.tls_compression_supported}\n`;
+      detail += `BEAST Vulnerable: ${tlsData.beast_vuln}\n`;
+      detail += `Able to Detect N-Minus-One Splitting: ${tlsData.able_to_detect_n_minus_one_splitting}\n`;
+      detail += `Insecure Cipher Suites: ${JSON.stringify(tlsData.insecure_cipher_suites || {})}\n`;
+
+      const cipherSuites = tlsData.given_cipher_suites || [];
+      detail += `Cipher Suites Offered: ${cipherSuites.length}\n`;
+      detail += `First 5 Ciphers: ${cipherSuites.slice(0, 5).join(', ')}\n`;
+
+      // Known browser cipher suite counts (approximate)
+      // Chrome typically offers 15-17 cipher suites
+      // If MITM proxy negotiates, it often offers different count or order
+      if (cipherSuites.length < 8) {
+        issues.push(`Only ${cipherSuites.length} cipher suites offered — unusually low, typical of proxy/middlebox TLS stack`);
+      }
+      if (cipherSuites.length > 30) {
+        issues.push(`${cipherSuites.length} cipher suites offered — unusually high, may indicate non-browser TLS stack`);
+      }
+
+      // Check for outdated TLS
+      if (tlsData.tls_version && !tlsData.tls_version.includes('1.3') && !tlsData.tls_version.includes('1.2')) {
+        issues.push(`TLS ${tlsData.tls_version} detected — modern browsers use TLS 1.2/1.3, downgrade indicates MITM`);
+      }
+
+      // Check for known MITM proxy cipher patterns
+      const cipherStr = cipherSuites.join(',').toLowerCase();
+      if (cipherStr.includes('rc4') || cipherStr.includes('des') || cipherStr.includes('export')) {
+        issues.push('Weak/legacy ciphers in suite — modern browsers do not offer these, strongly indicates MITM proxy');
+      }
+
+      // Check if TLS compression is enabled (browsers disable this, proxies sometimes enable)
+      if (tlsData.tls_compression_supported === true) {
+        issues.push('TLS compression enabled — browsers disable this for CRIME attack protection, indicates MITM proxy');
+      }
+
+      // Rating check
+      if (tlsData.rating && tlsData.rating !== 'Probably Okay') {
+        issues.push(`TLS rating: "${tlsData.rating}" — expected "Probably Okay" for modern browsers`);
+      }
+
+      if (issues.length > 0) {
+        detail += '\n⚠ ANOMALIES DETECTED:\n' + issues.join('\n');
+      }
+
+      checks.push({
+        name: 'TLS Fingerprint Analysis (howsmyssl.com)',
+        status: issues.length > 0 ? 'detected' : 'clear',
+        detail: detail
+      });
+
+      RESULTS.proxyDetection.tlsFingerprint = tlsData;
+      log(`  TLS fingerprint: ${tlsData.tls_version}, ${cipherSuites.length} ciphers, ${issues.length} anomalies`, issues.length > 0 ? 'warn' : 'pass');
+    } else {
+      checks.push({ name: 'TLS Fingerprint Analysis (howsmyssl.com)', status: 'info', detail: `Service returned HTTP ${tlsResp.status}` });
+    }
+  } catch (e) {
+    checks.push({
+      name: 'TLS Fingerprint Analysis (howsmyssl.com)',
+      status: 'info',
+      detail: `Could not reach TLS analysis service: ${e.message}\nThis may itself indicate network filtering.`
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // CHECK 11: Microsoft Security Headers Stripping
+  // Microsoft endpoints return specific security headers (HSTS, etc).
+  // MITM proxies sometimes strip or modify these.
+  // ═══════════════════════════════════════════════════════
+  try {
+    log('  Checking for security header stripping...', 'info');
+    const secResp = await fetch('https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration', {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(8000)
+    });
+
+    const expectedHeaders = {
+      'strict-transport-security': { required: true, desc: 'HSTS — should be present on all Microsoft auth endpoints' },
+      'x-content-type-options': { required: false, desc: 'Prevents MIME sniffing' },
+      'x-frame-options': { required: false, desc: 'Clickjacking protection' },
+    };
+
+    const foundSec = {};
+    const missingSec = [];
+    const allHeaders = {};
+
+    secResp.headers.forEach((val, key) => {
+      allHeaders[key.toLowerCase()] = val;
+    });
+
+    let detail = 'Response headers from login.microsoftonline.com:\n';
+    for (const [h, info] of Object.entries(expectedHeaders)) {
+      if (allHeaders[h]) {
+        foundSec[h] = allHeaders[h];
+        detail += `  ✓ ${h}: ${allHeaders[h]}\n`;
+      } else {
+        missingSec.push(h);
+        detail += `  ✕ ${h}: MISSING ${info.required ? '⚠ CRITICAL' : ''} — ${info.desc}\n`;
+      }
+    }
+
+    // Check HSTS specifically — it's the most important
+    const hsts = allHeaders['strict-transport-security'];
+    let hstsIssue = false;
+    if (!hsts) {
+      hstsIssue = true;
+      detail += '\n⚠ HSTS header is MISSING. Microsoft always sends this. A MITM proxy is very likely stripping it.';
+    } else {
+      const maxAge = hsts.match(/max-age=(\d+)/);
+      if (maxAge && parseInt(maxAge[1]) < 300) {
+        hstsIssue = true;
+        detail += `\n⚠ HSTS max-age is very low (${maxAge[1]}s). Microsoft typically uses much higher values. This may be modified by a proxy.`;
+      }
+    }
+
+    // Check for unexpected headers that proxies sometimes add
+    const suspiciousAdded = [];
+    for (const [k, v] of Object.entries(allHeaders)) {
+      if (k === 'x-cdn' || k === 'x-served-by' || k === 'x-timer' ||
+          k === 'x-proxy-cache' || k === 'x-varnish' || k === 'x-aspnet-version' ||
+          k === 'server' && !v.toLowerCase().includes('microsoft')) {
+        suspiciousAdded.push(`${k}: ${v}`);
+      }
+    }
+
+    if (suspiciousAdded.length > 0) {
+      detail += '\n\n⚠ Unexpected headers found (may be injected by proxy):\n  ' + suspiciousAdded.join('\n  ');
+    }
+
+    // Log ALL headers for forensic comparison
+    detail += '\n\nAll response headers (' + Object.keys(allHeaders).length + '):\n';
+    for (const [k, v] of Object.entries(allHeaders)) {
+      detail += `  ${k}: ${v}\n`;
+    }
+
+    const headerIssues = hstsIssue || suspiciousAdded.length > 0;
+
+    checks.push({
+      name: 'Security Header Stripping Detection',
+      status: headerIssues ? 'detected' : (missingSec.length > 0 ? 'detected' : 'clear'),
+      detail: detail
+    });
+
+    RESULTS.proxyDetection.securityHeaders = { found: foundSec, missing: missingSec, all: allHeaders };
+    log(`  Security headers: ${Object.keys(foundSec).length} found, ${missingSec.length} missing${hstsIssue ? ' — HSTS ISSUE' : ''}`, headerIssues ? 'warn' : 'pass');
+  } catch (e) {
+    checks.push({ name: 'Security Header Stripping Detection', status: 'error', detail: `Check failed: ${e.message}` });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // CHECK 12: Compression Re-encoding Detection
+  // MITM proxies decompress server response, inspect it, then recompress.
+  // This changes Content-Length and transfer characteristics.
+  // ═══════════════════════════════════════════════════════
+  try {
+    log('  Testing compression re-encoding...', 'info');
+
+    // Fetch with explicit gzip
+    const gzipResp = await fetch('https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration', {
+      cache: 'no-store',
+      headers: { 'Accept-Encoding': 'gzip' },
+      signal: AbortSignal.timeout(8000)
+    });
+    const gzipBody = await gzipResp.text();
+    const gzipContentLength = gzipResp.headers.get('content-length');
+    const gzipContentEncoding = gzipResp.headers.get('content-encoding');
+
+    // Fetch with identity (no compression)
+    const plainResp = await fetch('https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration', {
+      cache: 'no-store',
+      headers: { 'Accept-Encoding': 'identity' },
+      signal: AbortSignal.timeout(8000)
+    });
+    const plainBody = await plainResp.text();
+    const plainContentLength = plainResp.headers.get('content-length');
+    const plainContentEncoding = plainResp.headers.get('content-encoding');
+
+    const issues = [];
+    let detail = `With Accept-Encoding: gzip:\n`;
+    detail += `  Content-Encoding: ${gzipContentEncoding || 'none'}\n`;
+    detail += `  Content-Length: ${gzipContentLength || 'not set'}\n`;
+    detail += `  Body length (decoded): ${gzipBody.length}\n`;
+    detail += `\nWith Accept-Encoding: identity:\n`;
+    detail += `  Content-Encoding: ${plainContentEncoding || 'none'}\n`;
+    detail += `  Content-Length: ${plainContentLength || 'not set'}\n`;
+    detail += `  Body length: ${plainBody.length}\n`;
+
+    // Bodies should be identical when decoded
+    if (gzipBody !== plainBody) {
+      issues.push('Response body DIFFERS between gzip and identity requests — proxy may be modifying content');
+    }
+
+    // If both return same Content-Length regardless of encoding, proxy is decompressing
+    if (gzipContentLength && plainContentLength && gzipContentLength === plainContentLength && !gzipContentEncoding) {
+      issues.push('Same Content-Length for both encodings with no Content-Encoding header — proxy likely decompresses transparently');
+    }
+
+    if (issues.length > 0) {
+      detail += '\n⚠ ' + issues.join('\n⚠ ');
+    } else {
+      detail += '\nCompression behavior appears consistent.';
+    }
+
+    checks.push({
+      name: 'Compression Re-encoding Detection',
+      status: issues.length > 0 ? 'detected' : 'clear',
+      detail: detail
+    });
+    log(`  Compression: ${issues.length} anomalies`, issues.length > 0 ? 'warn' : 'pass');
+  } catch (e) {
+    checks.push({ name: 'Compression Re-encoding Detection', status: 'error', detail: `Check failed: ${e.message}` });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // CHECK 13: High-Precision Timing Microanalysis
+  // 20+ rapid samples — MITM adds consistent μs overhead.
+  // Statistical analysis reveals bimodal distribution or offset.
+  // ═══════════════════════════════════════════════════════
+  try {
+    log('  Running high-precision timing analysis (20 samples)...', 'info');
+    const samples = [];
+    const url = 'https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration';
+
+    // Warm up connection pool
+    try { await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(5000) }); } catch(e) {}
+
+    for (let i = 0; i < 20; i++) {
+      const s = performance.now();
+      try {
+        await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+      } catch(e) {}
+      samples.push(parseFloat((performance.now() - s).toFixed(2)));
+    }
+
+    samples.sort((a, b) => a - b);
+    const avg = samples.reduce((a, b) => a + b) / samples.length;
+    const median = samples[Math.floor(samples.length / 2)];
+    const min = samples[0];
+    const max = samples[samples.length - 1];
+    const jitter = max - min;
+    const stddev = Math.sqrt(samples.reduce((sum, s) => sum + Math.pow(s - avg, 2), 0) / samples.length);
+    const p95 = samples[Math.floor(samples.length * 0.95)];
+    const p5 = samples[Math.floor(samples.length * 0.05)];
+
+    // Coefficient of variation - high CV suggests inconsistent path
+    const cv = (stddev / avg) * 100;
+
+    // Check for bimodal distribution (gap between clusters)
+    let bimodalGap = 0;
+    for (let i = 1; i < samples.length; i++) {
+      const gap = samples[i] - samples[i - 1];
+      if (gap > bimodalGap) bimodalGap = gap;
+    }
+
+    const issues = [];
+    let detail = `20-sample timing analysis (ms):\n`;
+    detail += `  Samples: ${samples.map(s => Math.round(s)).join(', ')}\n`;
+    detail += `  Min: ${min.toFixed(1)}ms | Max: ${max.toFixed(1)}ms\n`;
+    detail += `  Avg: ${avg.toFixed(1)}ms | Median: ${median.toFixed(1)}ms\n`;
+    detail += `  StdDev: ${stddev.toFixed(1)}ms | CV: ${cv.toFixed(1)}%\n`;
+    detail += `  P5: ${p5.toFixed(1)}ms | P95: ${p95.toFixed(1)}ms\n`;
+    detail += `  Jitter: ${jitter.toFixed(1)}ms | Largest gap: ${bimodalGap.toFixed(1)}ms\n`;
+
+    // MITM detection heuristics
+    if (min > 50 && (avg - min) < 15) {
+      issues.push(`Very consistent floor at ${min.toFixed(0)}ms with only ${(avg - min).toFixed(0)}ms variance — consistent added overhead pattern typical of MITM proxy`);
+    }
+    if (bimodalGap > avg * 0.5) {
+      issues.push(`Large gap of ${bimodalGap.toFixed(0)}ms in sorted samples — bimodal distribution suggests two network paths (direct + proxy)`);
+    }
+    if (cv > 50) {
+      issues.push(`High coefficient of variation (${cv.toFixed(0)}%) — inconsistent latency suggests intermittent proxy processing`);
+    }
+    if (avg > median * 1.5) {
+      issues.push(`Avg (${avg.toFixed(0)}ms) much higher than median (${median.toFixed(0)}ms) — outliers suggest proxy timeout/retry behavior`);
+    }
+
+    if (issues.length > 0) {
+      detail += '\n⚠ ' + issues.join('\n⚠ ');
+    } else {
+      detail += '\nTiming distribution appears normal — no obvious proxy overhead pattern.';
+    }
+
+    checks.push({
+      name: 'High-Precision Timing (20 samples)',
+      status: issues.length > 0 ? 'detected' : 'clear',
+      detail: detail
+    });
+
+    RESULTS.proxyDetection.microTiming = { samples, avg, median, stddev, cv, min, max, p5, p95, bimodalGap };
+    log(`  Micro-timing: avg ${avg.toFixed(0)}ms, stddev ${stddev.toFixed(0)}ms, CV ${cv.toFixed(0)}%`, issues.length > 0 ? 'warn' : 'pass');
+  } catch (e) {
+    checks.push({ name: 'High-Precision Timing (20 samples)', status: 'error', detail: `Check failed: ${e.message}` });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // CHECK 14: JA3 TLS Fingerprint Comparison
+  // JA3 is a hash of the TLS Client Hello. When a MITM proxy
+  // terminates TLS, the JA3 seen by the server is the PROXY's,
+  // not the browser's. We compare against known browser JA3s.
+  // ═══════════════════════════════════════════════════════
+  try {
+    log('  Checking JA3 TLS fingerprint...', 'info');
+
+    let ja3Detail = '';
+    let ja3Issues = [];
+    let ja3Data = null;
+
+    // Try multiple JA3 services
+    const ja3Services = [
+      { name: 'ja3er.com', url: 'https://ja3er.com/json' },
+      { name: 'tls.peet.ws', url: 'https://tls.peet.ws/api/all' },
+    ];
+
+    for (const svc of ja3Services) {
+      try {
+        const resp = await fetch(svc.url, { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+        if (resp.ok) {
+          ja3Data = await resp.json();
+          ja3Detail += `Source: ${svc.name}\n`;
+
+          if (ja3Data.ja3_hash || ja3Data.ja3) {
+            const hash = ja3Data.ja3_hash || ja3Data.ja3;
+            ja3Detail += `JA3 Hash: ${hash}\n`;
+          }
+          if (ja3Data.ja3) {
+            ja3Detail += `JA3 Full: ${typeof ja3Data.ja3 === 'string' ? ja3Data.ja3.substring(0, 120) : JSON.stringify(ja3Data.ja3).substring(0, 120)}...\n`;
+          }
+          if (ja3Data.tls_version || (ja3Data.tls && ja3Data.tls.version)) {
+            ja3Detail += `TLS Version: ${ja3Data.tls_version || (ja3Data.tls && ja3Data.tls.version)}\n`;
+          }
+          if (ja3Data.user_agent) {
+            ja3Detail += `User-Agent seen by server: ${ja3Data.user_agent}\n`;
+          }
+          if (ja3Data.http_version || (ja3Data.http && ja3Data.http.version)) {
+            ja3Detail += `HTTP Version: ${ja3Data.http_version || (ja3Data.http && ja3Data.http.version)}\n`;
+          }
+
+          // Known proxy JA3 hashes (common intercepting proxies)
+          const knownProxyJA3 = [
+            'e7d705a3286e19ea42f587b344ee6865', // Fortigate
+            'b32309a26951912be7dba376398abc3b', // Zscaler
+            '3b5074b1b5d032e5620f69f9f700ff0e', // BlueCoat
+            'a0e9f5d64349fb13191bc781f81f42e1', // Palo Alto
+            'f09f8e0c0e1ec65f560aa44e48e2c24c', // Generic Go TLS client
+            '473cd7cb9faa642487833865d516e578', // Squid
+          ];
+
+          const hash = ja3Data.ja3_hash || ja3Data.ja3;
+          if (hash && knownProxyJA3.includes(hash)) {
+            ja3Issues.push(`JA3 hash ${hash} matches a KNOWN PROXY fingerprint — MITM confirmed`);
+          }
+
+          // Check if HTTP version is downgraded
+          const httpVer = ja3Data.http_version || (ja3Data.http && ja3Data.http.version) || '';
+          if (httpVer && (httpVer === '1.1' || httpVer === 'HTTP/1.1')) {
+            ja3Issues.push(`Server sees HTTP/1.1 — modern browsers use HTTP/2, this indicates TLS termination by a proxy`);
+          }
+
+          break; // Got data from one service, stop
+        }
+      } catch (e) {
+        ja3Detail += `${svc.name}: unreachable (${e.message})\n`;
+      }
+    }
+
+    if (!ja3Data) {
+      ja3Detail += 'Could not reach any JA3 fingerprint service.\nThis may itself indicate network filtering of security analysis tools.';
+    }
+
+    if (ja3Issues.length > 0) {
+      ja3Detail += '\n⚠ ' + ja3Issues.join('\n⚠ ');
+    }
+
+    checks.push({
+      name: 'JA3 TLS Fingerprint',
+      status: ja3Issues.length > 0 ? 'detected' : (ja3Data ? 'clear' : 'info'),
+      detail: ja3Detail
+    });
+
+    RESULTS.proxyDetection.ja3 = ja3Data;
+    log(`  JA3: ${ja3Issues.length > 0 ? ja3Issues.length + ' issues' : ja3Data ? 'captured' : 'service unavailable'}`, ja3Issues.length > 0 ? 'warn' : 'pass');
+  } catch (e) {
+    checks.push({ name: 'JA3 TLS Fingerprint', status: 'info', detail: `Check failed: ${e.message}` });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // CHECK 15: Enterprise Certificate Authority Detection
+  // Managed browsers with MITM have a custom root CA installed.
+  // We can detect this indirectly via managed browser flag + timing.
+  // ═══════════════════════════════════════════════════════
+  try {
+    log('  Analyzing enterprise CA indicators...', 'info');
+    const caHints = [];
+    let caDetected = false;
+
+    // Managed browser is a strong signal
+    if (navigator.managed === true) {
+      caHints.push('Browser is ENTERPRISE MANAGED — custom root CA is very likely installed for TLS inspection');
+      caDetected = true;
+    }
+
+    // Check if chrome.enterprise APIs exist (Chrome Enterprise)
+    if (window.chrome) {
+      if (window.chrome.enterprise) {
+        caHints.push('chrome.enterprise API present — Enterprise-managed Chrome with possible CA injection');
+        caDetected = true;
+      }
+      if (window.chrome.certificateProvider) {
+        caHints.push('chrome.certificateProvider API present — Enterprise certificate management active');
+        caDetected = true;
+      }
+    }
+
+    // Try to detect certificate pinning failure
+    // If we can reach a site with known pins but the pins don't match (MITM), fetch would still succeed
+    // because the custom CA overrides pins. We test by comparing behavior.
+    try {
+      // Google uses certificate pinning — if a MITM proxy is active, the connection
+      // still succeeds because the enterprise CA overrides pins in managed browsers
+      const pinTestStart = performance.now();
+      const pinResp = await fetch('https://www.google.com/generate_204', {
+        mode: 'no-cors',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000)
+      });
+      const pinTime = Math.round(performance.now() - pinTestStart);
+      caHints.push(`Pin test (google.com/generate_204): reachable in ${pinTime}ms, type: ${pinResp.type}`);
+
+      // Compare timing to Microsoft endpoint
+      const msTime = RESULTS.proxyDetection.microTiming ? RESULTS.proxyDetection.microTiming.median : null;
+      if (msTime && pinTime > 0) {
+        const ratio = pinTime / msTime;
+        caHints.push(`Google/Microsoft timing ratio: ${ratio.toFixed(2)} (values close to 1.0 suggest same network path)`);
+      }
+    } catch(e) {
+      caHints.push(`Pin test failed: ${e.message}`);
+    }
+
+    checks.push({
+      name: 'Enterprise CA / Managed Browser',
+      status: caDetected ? 'detected' : 'clear',
+      detail: caHints.length > 0 ? caHints.join('\n') : 'No enterprise management indicators detected.'
+    });
+    log(`  Enterprise CA: ${caDetected ? 'indicators found' : 'not detected'}`, caDetected ? 'warn' : 'pass');
+  } catch (e) {
+    checks.push({ name: 'Enterprise CA / Managed Browser', status: 'info', detail: `Check failed: ${e.message}` });
+  }
+
+  // ═══════════════════════════════════════════════════════
   // COMPILE RESULTS
   // ═══════════════════════════════════════════════════════
   const proxyElapsed = Math.round(performance.now() - proxyStart);
