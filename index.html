@@ -698,6 +698,116 @@
     padding-top: 12px;
     border-top: 1px solid rgba(30, 45, 74, 0.4);
   }
+
+  /* Proxy detection panel */
+  .proxy-panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 16px;
+    overflow: hidden;
+    display: none;
+  }
+
+  .proxy-panel.active { display: block; }
+
+  .proxy-panel.proxy-detected { border-left: 3px solid var(--accent-yellow); }
+  .proxy-panel.proxy-clear { border-left: 3px solid var(--accent-green); }
+  .proxy-panel.proxy-error { border-left: 3px solid var(--accent-red); }
+
+  .proxy-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .proxy-header:hover { background: var(--bg-card-hover); }
+
+  .proxy-title-area {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .proxy-body {
+    display: none;
+    padding: 0 20px 16px;
+    border-top: 1px solid var(--border);
+  }
+
+  .proxy-body.open {
+    display: block;
+    padding-top: 16px;
+  }
+
+  .proxy-check-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(30, 45, 74, 0.4);
+    font-size: 12px;
+  }
+
+  .proxy-check-row:last-child { border-bottom: none; }
+
+  .proxy-check-icon {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    margin-top: 1px;
+  }
+
+  .pci-detected {
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid var(--accent-yellow);
+    color: var(--accent-yellow);
+  }
+
+  .pci-clear {
+    background: rgba(16, 185, 129, 0.15);
+    border: 1px solid var(--accent-green);
+    color: var(--accent-green);
+  }
+
+  .pci-error {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid var(--accent-red);
+    color: var(--accent-red);
+  }
+
+  .pci-info {
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid var(--accent-blue);
+    color: var(--accent-blue);
+  }
+
+  .proxy-check-content {
+    flex: 1;
+  }
+
+  .proxy-check-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+  }
+
+  .proxy-check-detail {
+    color: var(--text-secondary);
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.5;
+    word-break: break-all;
+  }
 </style>
 </head>
 <body>
@@ -759,6 +869,25 @@
   <div class="env-bar" id="envBar">
     <h3>Environment Information</h3>
     <div class="env-grid" id="envGrid"></div>
+  </div>
+
+  <div class="proxy-panel" id="proxyPanel">
+    <div class="proxy-header" onclick="toggleProxyPanel()">
+      <div class="proxy-title-area">
+        <div class="status-icon status-pending" id="proxyStatusIcon">◦</div>
+        <div class="section-title">
+          <h3>Proxy & Network Interception Detection</h3>
+          <p>WPAD/PAC, WebRTC, IP analysis, timing differentials, header inspection</p>
+        </div>
+      </div>
+      <div class="section-timing">
+        <span id="proxyTiming">—</span>
+        <span class="chevron" id="proxyChev">▾</span>
+      </div>
+    </div>
+    <div class="proxy-body" id="proxyBody">
+      <div id="proxyChecks"></div>
+    </div>
   </div>
 
   <div id="testSections"></div>
@@ -995,6 +1124,605 @@ async function detectPublicIP() {
 
 // DNS Resolution test via timing
 async function testDNSResolution(hostname) {
+  const start = performance.now();
+  try {
+    await fetch(`https://${hostname}/favicon.ico`, {
+      mode: 'no-cors',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(8000)
+    });
+  } catch (e) {
+    // Even errors tell us DNS resolved if we got a network error vs timeout
+  }
+  return performance.now() - start;
+}
+
+function toggleProxyPanel() {
+  document.getElementById('proxyBody').classList.toggle('open');
+  document.getElementById('proxyChev').classList.toggle('open');
+}
+
+// Comprehensive proxy detection
+async function detectProxyConfiguration() {
+  const proxyStart = performance.now();
+  const checks = [];
+  RESULTS.proxyDetection = { checks: [], summary: 'unknown', detectedIndicators: 0, totalChecks: 0 };
+
+  log('Running proxy detection...', 'info');
+
+  // ═══════════════════════════════════════════════════════
+  // CHECK 1: WPAD / PAC Auto-Discovery
+  // Corporate networks commonly use WPAD to auto-configure proxies
+  // ═══════════════════════════════════════════════════════
+  try {
+    log('  Checking WPAD/PAC auto-discovery...', 'info');
+    const wpadUrls = [
+      'http://wpad/wpad.dat',
+      'http://wpad.' + location.hostname.split('.').slice(-2).join('.') + '/wpad.dat',
+    ];
+
+    let wpadFound = false;
+    let wpadDetails = [];
+
+    for (const wpadUrl of wpadUrls) {
+      try {
+        const resp = await fetch(wpadUrl, {
+          mode: 'no-cors',
+          cache: 'no-store',
+          signal: AbortSignal.timeout(3000)
+        });
+        // no-cors returns opaque response, but if it doesn't throw, something answered
+        wpadDetails.push(`${wpadUrl} — responded (type: ${resp.type})`);
+        wpadFound = true;
+      } catch (e) {
+        wpadDetails.push(`${wpadUrl} — not reachable`);
+      }
+    }
+
+    // Also try to detect via DNS by checking if "wpad" hostname resolves
+    try {
+      const wpadDirect = await fetch('http://wpad:80/', {
+        mode: 'no-cors',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(2000)
+      });
+      wpadDetails.push(`wpad hostname — resolved (type: ${wpadDirect.type})`);
+      wpadFound = true;
+    } catch (e) {
+      wpadDetails.push('wpad hostname — not resolvable');
+    }
+
+    checks.push({
+      name: 'WPAD / PAC Auto-Discovery',
+      status: wpadFound ? 'detected' : 'clear',
+      detail: wpadFound
+        ? 'WPAD proxy auto-configuration detected. Corporate network likely uses automatic proxy configuration.\n' + wpadDetails.join('\n')
+        : 'No WPAD auto-discovery found.\n' + wpadDetails.join('\n')
+    });
+    log(`  WPAD: ${wpadFound ? 'DETECTED' : 'not found'}`, wpadFound ? 'warn' : 'pass');
+  } catch (e) {
+    checks.push({ name: 'WPAD / PAC Auto-Discovery', status: 'info', detail: `Check inconclusive: ${e.message}` });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // CHECK 2: WebRTC Local IP Detection
+  // Reveals internal network IPs which indicate network topology
+  // ═══════════════════════════════════════════════════════
+  try {
+    log('  Detecting local IPs via WebRTC...', 'info');
+    const localIPs = await new Promise((resolve) => {
+      const ips = new Set();
+      const timeout = setTimeout(() => resolve([...ips]), 5000);
+
+      try {
+        const pc = new RTCPeerConnection({
+          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        });
+        pc.createDataChannel('');
+        pc.createOffer().then(offer => pc.setLocalDescription(offer)).catch(() => {});
+
+        pc.onicecandidate = (e) => {
+          if (!e || !e.candidate || !e.candidate.candidate) {
+            clearTimeout(timeout);
+            pc.close();
+            resolve([...ips]);
+            return;
+          }
+          const parts = e.candidate.candidate.split(' ');
+          const ip = parts[4];
+          if (ip && !ip.includes(':') && ip !== '0.0.0.0') {
+            ips.add(ip);
+          }
+          // Also capture mDNS candidates
+          if (e.candidate.candidate.includes('.local')) {
+            const mdns = e.candidate.candidate.match(/([a-f0-9-]+\.local)/);
+            if (mdns) ips.add(mdns[1] + ' (mDNS obfuscated)');
+          }
+        };
+      } catch (e) {
+        clearTimeout(timeout);
+        resolve([...ips]);
+      }
+    });
+
+    const hasPrivateIP = localIPs.some(ip =>
+      ip.startsWith('10.') ||
+      ip.startsWith('172.16.') || ip.startsWith('172.17.') || ip.startsWith('172.18.') ||
+      ip.startsWith('172.19.') || ip.startsWith('172.2') || ip.startsWith('172.30.') ||
+      ip.startsWith('172.31.') ||
+      ip.startsWith('192.168.') ||
+      ip.includes('.local')
+    );
+
+    const ipDetail = localIPs.length > 0
+      ? `Local IPs found: ${localIPs.join(', ')}\n${hasPrivateIP ? 'Private/RFC1918 address detected — machine is behind NAT (typical for corporate networks)' : 'Public-facing IP only'}`
+      : 'No local IPs detected (WebRTC may be blocked or mDNS obfuscation active)';
+
+    checks.push({
+      name: 'WebRTC Local Network Detection',
+      status: localIPs.length > 0 ? 'info' : 'info',
+      detail: ipDetail
+    });
+
+    RESULTS.proxyDetection.localIPs = localIPs;
+    log(`  WebRTC IPs: ${localIPs.length > 0 ? localIPs.join(', ') : 'none detected'}`, 'info');
+  } catch (e) {
+    checks.push({ name: 'WebRTC Local Network Detection', status: 'info', detail: `WebRTC not available: ${e.message}` });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // CHECK 3: Multiple IP Service Cross-Reference
+  // If different services see different IPs, proxy is present
+  // ═══════════════════════════════════════════════════════
+  try {
+    log('  Cross-referencing public IP via multiple services...', 'info');
+    const ipServices = [
+      { name: 'httpbin.org', url: 'https://httpbin.org/ip', extract: (d) => d.origin },
+      { name: 'ipify.org', url: 'https://api.ipify.org?format=json', extract: (d) => d.ip },
+      { name: 'icanhazip', url: 'https://icanhazip.com', extract: (d) => d.trim(), isText: true },
+    ];
+
+    const detectedIPs = [];
+
+    for (const svc of ipServices) {
+      try {
+        const resp = await fetch(svc.url, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+        if (resp.ok) {
+          const data = svc.isText ? await resp.text() : await resp.json();
+          const ip = svc.extract(data);
+          detectedIPs.push({ service: svc.name, ip });
+        }
+      } catch (e) {
+        detectedIPs.push({ service: svc.name, ip: `Error: ${e.message}` });
+      }
+    }
+
+    const validIPs = detectedIPs.filter(d => !d.ip.startsWith('Error')).map(d => d.ip);
+    const uniqueIPs = [...new Set(validIPs)];
+    const mismatch = uniqueIPs.length > 1;
+
+    let detail = detectedIPs.map(d => `${d.service}: ${d.ip}`).join('\n');
+    if (mismatch) {
+      detail += '\n⚠ DIFFERENT IPs from different services — traffic may be routed through different proxies';
+    } else if (uniqueIPs.length === 1) {
+      detail += '\nAll services report same IP — consistent egress path';
+    }
+
+    checks.push({
+      name: 'Public IP Cross-Reference',
+      status: mismatch ? 'detected' : (validIPs.length > 0 ? 'clear' : 'error'),
+      detail: detail
+    });
+
+    RESULTS.proxyDetection.publicIPs = detectedIPs;
+    log(`  IP cross-ref: ${uniqueIPs.join(', ') || 'no IPs detected'}${mismatch ? ' — MISMATCH!' : ''}`, mismatch ? 'warn' : 'pass');
+  } catch (e) {
+    checks.push({ name: 'Public IP Cross-Reference', status: 'error', detail: `Check failed: ${e.message}` });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // CHECK 4: Proxy Headers in Microsoft Responses
+  // Aggregate proxy headers found across all already-tested endpoints
+  // ═══════════════════════════════════════════════════════
+  try {
+    log('  Analyzing response headers for proxy signatures...', 'info');
+    const proxyHeaderNames = [
+      'via', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto',
+      'x-real-ip', 'x-cache', 'x-cache-hit', 'x-cache-lookup',
+      'front-end-https', 'x-proxy-id', 'x-authenticated-user'
+    ];
+    const proxyVendorPatterns = [
+      'bluecoat', 'zscaler', 'squid', 'fortinet', 'fortigate',
+      'palo-alto', 'barracuda', 'sophos', 'websense', 'netskope',
+      'mcafee', 'symantec', 'cisco', 'checkpoint'
+    ];
+
+    const foundHeaders = [];
+
+    for (const t of RESULTS.tests) {
+      for (const [k, v] of Object.entries(t.headers || {})) {
+        const kl = k.toLowerCase();
+        if (proxyHeaderNames.includes(kl) || proxyVendorPatterns.some(p => kl.includes(p))) {
+          foundHeaders.push({ endpoint: t.name, header: k, value: v });
+        }
+      }
+    }
+
+    if (foundHeaders.length > 0) {
+      const detail = foundHeaders.map(h => `${h.endpoint} → ${h.header}: ${h.value}`).join('\n');
+      checks.push({
+        name: 'Proxy Headers in Responses',
+        status: 'detected',
+        detail: `${foundHeaders.length} proxy header(s) found across endpoint responses:\n${detail}`
+      });
+      log(`  Proxy headers: ${foundHeaders.length} found`, 'warn');
+    } else {
+      checks.push({
+        name: 'Proxy Headers in Responses',
+        status: 'clear',
+        detail: 'No proxy-specific headers (Via, X-Forwarded-For, vendor headers) detected in any Microsoft endpoint responses.'
+      });
+      log('  Proxy headers: none found', 'pass');
+    }
+  } catch (e) {
+    checks.push({ name: 'Proxy Headers in Responses', status: 'error', detail: `Check failed: ${e.message}` });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // CHECK 5: Timing Differential Analysis
+  // Proxies add consistent overhead — compare direct IP vs hostname
+  // ═══════════════════════════════════════════════════════
+  try {
+    log('  Running timing differential analysis...', 'info');
+
+    // Test: Fetch same logical endpoint multiple times and analyze jitter
+    const timingSamples = [];
+    for (let i = 0; i < 5; i++) {
+      const s = performance.now();
+      try {
+        await fetch('https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration', {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(8000)
+        });
+      } catch (e) {}
+      timingSamples.push(Math.round(performance.now() - s));
+    }
+
+    const avg = Math.round(timingSamples.reduce((a, b) => a + b) / timingSamples.length);
+    const min = Math.min(...timingSamples);
+    const max = Math.max(...timingSamples);
+    const jitter = max - min;
+
+    // Also test a non-Microsoft endpoint for comparison
+    const extSamples = [];
+    for (let i = 0; i < 3; i++) {
+      const s = performance.now();
+      try {
+        await fetch('https://httpbin.org/status/200', {
+          cache: 'no-store',
+          mode: 'no-cors',
+          signal: AbortSignal.timeout(8000)
+        });
+      } catch (e) {}
+      extSamples.push(Math.round(performance.now() - s));
+    }
+    const extAvg = extSamples.length > 0 ? Math.round(extSamples.reduce((a, b) => a + b) / extSamples.length) : 0;
+
+    const highLatency = avg > 1500;
+    const highJitter = jitter > 1000;
+    const suspiciousDelta = Math.abs(avg - extAvg) > 500;
+
+    let detail = `Microsoft auth endpoint (5 samples):\n  Samples: ${timingSamples.join('ms, ')}ms\n  Avg: ${avg}ms | Min: ${min}ms | Max: ${max}ms | Jitter: ${jitter}ms\n`;
+    detail += `\nExternal endpoint (3 samples):\n  Samples: ${extSamples.join('ms, ')}ms\n  Avg: ${extAvg}ms\n`;
+    detail += `\nDelta: ${Math.abs(avg - extAvg)}ms`;
+
+    if (highLatency) detail += '\n⚠ High average latency — possible SSL inspection or proxy overhead';
+    if (highJitter) detail += '\n⚠ High jitter — inconsistent network path or proxy queueing';
+    if (suspiciousDelta) detail += '\n⚠ Large difference between Microsoft and external endpoints — selective proxy routing possible';
+
+    checks.push({
+      name: 'Timing Differential Analysis',
+      status: (highLatency || highJitter || suspiciousDelta) ? 'detected' : 'clear',
+      detail: detail
+    });
+
+    RESULTS.proxyDetection.timingAnalysis = { msAuth: timingSamples, external: extSamples, avg, extAvg, jitter };
+    log(`  Timing: MS avg ${avg}ms, ext avg ${extAvg}ms, jitter ${jitter}ms`, (highLatency || highJitter) ? 'warn' : 'pass');
+  } catch (e) {
+    checks.push({ name: 'Timing Differential Analysis', status: 'error', detail: `Check failed: ${e.message}` });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // CHECK 6: Resource Timing / Performance API
+  // Can reveal proxy negotiation in connection stages
+  // ═══════════════════════════════════════════════════════
+  try {
+    log('  Analyzing Performance Resource Timing...', 'info');
+    // Clear existing entries and make a fresh request
+    performance.clearResourceTimings();
+
+    await fetch('https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration', {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(8000)
+    });
+
+    const entries = performance.getEntriesByType('resource').filter(e =>
+      e.name.includes('login.microsoftonline.com')
+    );
+
+    if (entries.length > 0) {
+      const entry = entries[entries.length - 1];
+      const breakdown = {
+        dns: Math.round(entry.domainLookupEnd - entry.domainLookupStart),
+        tcp: Math.round(entry.connectEnd - entry.connectStart),
+        ssl: Math.round(entry.connectEnd - entry.secureConnectionStart),
+        ttfb: Math.round(entry.responseStart - entry.requestStart),
+        download: Math.round(entry.responseEnd - entry.responseStart),
+        total: Math.round(entry.responseEnd - entry.startTime),
+        redirects: Math.round(entry.redirectEnd - entry.redirectStart),
+        // These can indicate proxy
+        workerStart: Math.round(entry.workerStart || 0),
+        nextHopProtocol: entry.nextHopProtocol || 'unknown',
+        transferSize: entry.transferSize,
+        encodedBodySize: entry.encodedBodySize,
+        decodedBodySize: entry.decodedBodySize,
+      };
+
+      const slowTCP = breakdown.tcp > 500;
+      const slowSSL = breakdown.ssl > 1000;
+      const slowTTFB = breakdown.ttfb > 1000;
+      const hasRedirects = breakdown.redirects > 0;
+
+      let detail = `Resource Timing for login.microsoftonline.com:\n`;
+      detail += `  DNS Lookup:     ${breakdown.dns}ms ${breakdown.dns === 0 ? '(cached)' : ''}\n`;
+      detail += `  TCP Connect:    ${breakdown.tcp}ms ${slowTCP ? '⚠ SLOW' : ''}\n`;
+      detail += `  SSL/TLS:        ${breakdown.ssl}ms ${slowSSL ? '⚠ SLOW — possible SSL interception' : ''}\n`;
+      detail += `  TTFB:           ${breakdown.ttfb}ms ${slowTTFB ? '⚠ SLOW' : ''}\n`;
+      detail += `  Download:       ${breakdown.download}ms\n`;
+      detail += `  Total:          ${breakdown.total}ms\n`;
+      detail += `  Redirects:      ${breakdown.redirects}ms ${hasRedirects ? '⚠ unexpected redirect stage' : ''}\n`;
+      detail += `  Protocol:       ${breakdown.nextHopProtocol}\n`;
+      detail += `  Transfer Size:  ${breakdown.transferSize} bytes\n`;
+      detail += `  Encoded Body:   ${breakdown.encodedBodySize} bytes\n`;
+      detail += `  Decoded Body:   ${breakdown.decodedBodySize} bytes`;
+
+      if (breakdown.transferSize > 0 && breakdown.encodedBodySize > 0 &&
+          breakdown.transferSize - breakdown.encodedBodySize > 500) {
+        detail += '\n⚠ Large header overhead (transfer vs body) — possible proxy injection of headers';
+      }
+
+      checks.push({
+        name: 'Performance Resource Timing',
+        status: (slowSSL || slowTCP || hasRedirects) ? 'detected' : 'clear',
+        detail: detail
+      });
+
+      RESULTS.proxyDetection.resourceTiming = breakdown;
+      log(`  Resource timing: DNS ${breakdown.dns}ms, TCP ${breakdown.tcp}ms, SSL ${breakdown.ssl}ms, TTFB ${breakdown.ttfb}ms`, (slowSSL || slowTCP) ? 'warn' : 'pass');
+    } else {
+      checks.push({
+        name: 'Performance Resource Timing',
+        status: 'info',
+        detail: 'No resource timing entries available (cross-origin timing may be restricted by Timing-Allow-Origin header)'
+      });
+      log('  Resource timing: no entries available', 'info');
+    }
+  } catch (e) {
+    checks.push({ name: 'Performance Resource Timing', status: 'error', detail: `Check failed: ${e.message}` });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // CHECK 7: HTTP/2 vs HTTP/1.1 Protocol Detection
+  // Proxies often downgrade HTTP/2 to HTTP/1.1
+  // ═══════════════════════════════════════════════════════
+  try {
+    log('  Checking HTTP protocol negotiation...', 'info');
+    const protoEntries = performance.getEntriesByType('resource').filter(e =>
+      e.name.includes('login.microsoftonline.com') || e.name.includes('graph.microsoft.com')
+    );
+
+    const protocols = {};
+    protoEntries.forEach(e => {
+      const host = new URL(e.name).hostname;
+      if (e.nextHopProtocol) {
+        protocols[host] = e.nextHopProtocol;
+      }
+    });
+
+    const protoList = Object.entries(protocols);
+    if (protoList.length > 0) {
+      const hasHTTP1 = protoList.some(([_, p]) => p === 'http/1.1' || p === 'http/1.0');
+      let detail = protoList.map(([h, p]) => `${h}: ${p}`).join('\n');
+
+      if (hasHTTP1) {
+        detail += '\n\n⚠ HTTP/1.1 detected — Microsoft endpoints normally negotiate HTTP/2 (h2). HTTP/1.1 strongly suggests a proxy or firewall is intercepting and downgrading the connection.';
+      } else {
+        detail += '\n\nHTTP/2 (h2) negotiated as expected — no protocol downgrade detected.';
+      }
+
+      checks.push({
+        name: 'HTTP Protocol Negotiation',
+        status: hasHTTP1 ? 'detected' : 'clear',
+        detail: detail
+      });
+      log(`  Protocol: ${protoList.map(([h, p]) => `${h}=${p}`).join(', ')}`, hasHTTP1 ? 'warn' : 'pass');
+    } else {
+      checks.push({
+        name: 'HTTP Protocol Negotiation',
+        status: 'info',
+        detail: 'Protocol data not available from Performance API.'
+      });
+    }
+  } catch (e) {
+    checks.push({ name: 'HTTP Protocol Negotiation', status: 'error', detail: `Check failed: ${e.message}` });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // CHECK 8: Response Body Size Validation
+  // Proxies sometimes inject content or replace responses
+  // ═══════════════════════════════════════════════════════
+  try {
+    log('  Validating response body integrity...', 'info');
+    const resp = await fetch('https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration', {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(8000)
+    });
+    const body = await resp.text();
+
+    // Validate it's proper OpenID config
+    let isValid = false;
+    let issues = [];
+    try {
+      const json = JSON.parse(body);
+      if (json.token_endpoint && json.authorization_endpoint && json.issuer) {
+        isValid = true;
+        if (!json.token_endpoint.includes('login.microsoftonline.com') &&
+            !json.token_endpoint.includes('login.microsoft.com')) {
+          issues.push(`Token endpoint points to unexpected domain: ${json.token_endpoint}`);
+        }
+        if (!json.issuer.includes('sts.windows.net') && !json.issuer.includes('login.microsoftonline.com')) {
+          issues.push(`Issuer is unexpected: ${json.issuer}`);
+        }
+      } else {
+        issues.push('Response missing required OpenID fields (token_endpoint, authorization_endpoint, issuer)');
+      }
+    } catch (e) {
+      issues.push(`Response is not valid JSON: ${e.message}`);
+      issues.push(`Body starts with: ${body.substring(0, 200)}`);
+    }
+
+    // Check for injected content
+    if (body.includes('<script') || body.includes('<html') || body.includes('<iframe')) {
+      issues.push('Response contains HTML/script tags — proxy may be injecting content');
+    }
+
+    checks.push({
+      name: 'Response Body Integrity',
+      status: issues.length > 0 ? 'detected' : 'clear',
+      detail: isValid && issues.length === 0
+        ? 'OpenID Configuration response is valid and unmodified. Token endpoint and issuer match expected Microsoft domains.'
+        : `Integrity issues found:\n${issues.join('\n')}`
+    });
+    log(`  Body integrity: ${issues.length === 0 ? 'valid' : issues.length + ' issues'}`, issues.length > 0 ? 'warn' : 'pass');
+  } catch (e) {
+    checks.push({ name: 'Response Body Integrity', status: 'error', detail: `Check failed: ${e.message}` });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // CHECK 9: Browser Proxy Configuration (navigator hints)
+  // ═══════════════════════════════════════════════════════
+  try {
+    log('  Checking browser/OS proxy hints...', 'info');
+    let detail = '';
+    const hints = [];
+
+    // Check connection info
+    if (navigator.connection) {
+      const c = navigator.connection;
+      hints.push(`Connection type: ${c.effectiveType || 'unknown'}`);
+      hints.push(`Downlink: ${c.downlink || 'unknown'} Mbps`);
+      hints.push(`RTT: ${c.rtt || 'unknown'}ms`);
+      if (c.rtt > 300) hints.push('⚠ High RTT may indicate proxy routing');
+    }
+
+    // Check if running in controlled environment
+    if (navigator.managed !== undefined) {
+      hints.push(`Managed browser: ${navigator.managed ? 'YES — enterprise managed' : 'no'}`);
+    }
+
+    // Check for Enterprise policies via chrome
+    if (window.chrome && window.chrome.runtime) {
+      hints.push('Chrome Enterprise runtime detected');
+    }
+
+    // Check if Brave or privacy browser (may have built-in proxy)
+    if (navigator.brave) {
+      hints.push('Brave browser detected (built-in privacy proxy possible)');
+    }
+
+    detail = hints.length > 0 ? hints.join('\n') : 'No additional browser proxy hints available.';
+
+    checks.push({
+      name: 'Browser & OS Network Hints',
+      status: 'info',
+      detail: detail
+    });
+  } catch (e) {
+    checks.push({ name: 'Browser & OS Network Hints', status: 'info', detail: `Limited info: ${e.message}` });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // COMPILE RESULTS
+  // ═══════════════════════════════════════════════════════
+  const proxyElapsed = Math.round(performance.now() - proxyStart);
+  const detectedCount = checks.filter(c => c.status === 'detected').length;
+  const clearCount = checks.filter(c => c.status === 'clear').length;
+
+  RESULTS.proxyDetection.checks = checks;
+  RESULTS.proxyDetection.totalChecks = checks.length;
+  RESULTS.proxyDetection.detectedIndicators = detectedCount;
+  RESULTS.proxyDetection.timing = proxyElapsed;
+
+  let overallStatus;
+  if (detectedCount >= 3) {
+    overallStatus = 'detected';
+    RESULTS.proxyDetection.summary = 'PROXY LIKELY — Multiple indicators detected';
+  } else if (detectedCount >= 1) {
+    overallStatus = 'detected';
+    RESULTS.proxyDetection.summary = 'PROXY POSSIBLE — Some indicators detected';
+  } else {
+    overallStatus = 'clear';
+    RESULTS.proxyDetection.summary = 'NO PROXY DETECTED — All checks clear';
+  }
+
+  // Update UI
+  const panel = document.getElementById('proxyPanel');
+  panel.classList.add('active');
+  panel.classList.add(overallStatus === 'detected' ? 'proxy-detected' : 'proxy-clear');
+
+  const icon = document.getElementById('proxyStatusIcon');
+  if (overallStatus === 'detected') {
+    icon.className = 'status-icon status-warn';
+    icon.textContent = '!';
+  } else {
+    icon.className = 'status-icon status-pass';
+    icon.textContent = '✓';
+  }
+
+  document.getElementById('proxyTiming').textContent = `${detectedCount}/${checks.length} indicators · ${proxyElapsed}ms`;
+
+  // Render checks
+  const container = document.getElementById('proxyChecks');
+  container.innerHTML = '';
+  for (const check of checks) {
+    const iconCls = check.status === 'detected' ? 'pci-detected' :
+                    check.status === 'clear' ? 'pci-clear' :
+                    check.status === 'error' ? 'pci-error' : 'pci-info';
+    const iconSymbol = check.status === 'detected' ? '!' :
+                       check.status === 'clear' ? '✓' :
+                       check.status === 'error' ? '✕' : 'ℹ';
+
+    container.innerHTML += `
+      <div class="proxy-check-row">
+        <div class="proxy-check-icon ${iconCls}">${iconSymbol}</div>
+        <div class="proxy-check-content">
+          <div class="proxy-check-name">${escHtml(check.name)} <span class="tag tag-${check.status === 'detected' ? 'warn' : check.status === 'clear' ? 'pass' : check.status === 'error' ? 'fail' : 'info'}">${check.status}</span></div>
+          <div class="proxy-check-detail">${escHtml(check.detail)}</div>
+        </div>
+      </div>`;
+  }
+
+  // Auto-expand if proxy detected
+  if (detectedCount > 0) {
+    document.getElementById('proxyBody').classList.add('open');
+    document.getElementById('proxyChev').classList.add('open');
+  }
+
+  log(`Proxy detection complete: ${detectedCount}/${checks.length} indicators, ${proxyElapsed}ms`, detectedCount > 0 ? 'warn' : 'pass');
+  return RESULTS.proxyDetection;
+}
+
+
   const start = performance.now();
   try {
     // We use an image load trick to test DNS separately
@@ -1894,6 +2622,50 @@ function generateFindings() {
     }
   }
 
+  // Add proxy detection findings
+  if (RESULTS.proxyDetection) {
+    const pd = RESULTS.proxyDetection;
+    if (pd.detectedIndicators >= 3) {
+      findings.push({
+        type: 'critical',
+        title: 'Proxy / Network Interception Detected',
+        msg: `${pd.detectedIndicators} of ${pd.totalChecks} proxy indicators triggered. ${pd.summary}. Detected checks: ${pd.checks.filter(c => c.status === 'detected').map(c => c.name).join(', ')}. This is very likely interfering with the OAuth admin consent flow. Request IT to bypass proxy for Microsoft authentication endpoints.`
+      });
+    } else if (pd.detectedIndicators >= 1) {
+      findings.push({
+        type: 'warning',
+        title: 'Possible Proxy / Network Interception',
+        msg: `${pd.detectedIndicators} of ${pd.totalChecks} proxy indicators triggered: ${pd.checks.filter(c => c.status === 'detected').map(c => c.name).join(', ')}. This may be affecting the OAuth admin consent flow.`
+      });
+    } else {
+      findings.push({
+        type: 'info',
+        title: 'No Proxy Detected',
+        msg: `All ${pd.totalChecks} proxy detection checks are clear. No evidence of proxy, WPAD, SSL interception, or protocol downgrade from this network.`
+      });
+    }
+
+    // HTTP/1.1 downgrade is especially critical
+    const protocolCheck = pd.checks.find(c => c.name === 'HTTP Protocol Negotiation' && c.status === 'detected');
+    if (protocolCheck) {
+      findings.push({
+        type: 'critical',
+        title: 'HTTP Protocol Downgrade Detected',
+        msg: 'Microsoft endpoints are being served over HTTP/1.1 instead of HTTP/2. This is a strong indicator of an intercepting proxy or firewall performing SSL inspection, as the TLS-ALPN negotiation is being broken by the middlebox.'
+      });
+    }
+
+    // Body integrity issues
+    const integrityCheck = pd.checks.find(c => c.name === 'Response Body Integrity' && c.status === 'detected');
+    if (integrityCheck) {
+      findings.push({
+        type: 'critical',
+        title: 'Response Body Tampering Detected',
+        msg: 'The OpenID Configuration response from Microsoft has been modified or replaced. This means a proxy or firewall is actively altering Azure AD responses, which will break OAuth token exchange and admin consent flows.'
+      });
+    }
+  }
+
   // Add redirect test results
   if (RESULTS.redirectTest) {
     for (const f of RESULTS.redirectTest.findings.filter(f => f.type !== 'info')) {
@@ -1935,7 +2707,7 @@ async function runAllTests() {
   RESULTS.findings = [];
   RESULTS.timestamp = new Date().toISOString();
 
-  const totalTests = ENDPOINTS.length + 3; // endpoints + ssl + redirect + websocket
+  const totalTests = ENDPOINTS.length + 4; // endpoints + ssl + redirect + websocket + proxy
   let completed = 0;
 
   document.getElementById('progressContainer').classList.add('active');
@@ -1961,8 +2733,14 @@ async function runAllTests() {
     updateSummary();
   }
 
-  // Phase 4: SSL Inspection test
-  log('\n═══ PHASE 3: SSL Inspection Detection ═══', 'info');
+  // Phase 4: Proxy Detection (runs after endpoints so it can analyze their headers)
+  log('\n═══ PHASE 3: Proxy & Network Interception Detection ═══', 'info');
+  updateProgress(completed, totalTests, 'Detecting proxy configuration...');
+  await detectProxyConfiguration();
+  completed++;
+
+  // Phase 5: SSL Inspection test
+  log('\n═══ PHASE 4: SSL Inspection Detection ═══', 'info');
   updateProgress(completed, totalTests, 'Analyzing SSL inspection...');
   RESULTS.sslTest = await testSSLInspection();
   completed++;
@@ -2123,6 +2901,31 @@ function generateTextReport() {
     const icon = f.type === 'critical' ? '🔴' : f.type === 'warning' ? '🟡' : '🔵';
     report += `\n  ${icon} ${f.title || ''}\n`;
     report += `    ${f.msg}\n`;
+  }
+
+  // Proxy Detection Details
+  if (RESULTS.proxyDetection) {
+    report += '\n── PROXY DETECTION ─────────────────────────────────────\n';
+    report += `  Summary: ${RESULTS.proxyDetection.summary}\n`;
+    report += `  Indicators: ${RESULTS.proxyDetection.detectedIndicators}/${RESULTS.proxyDetection.totalChecks}\n`;
+    report += `  Detection Time: ${RESULTS.proxyDetection.timing}ms\n`;
+
+    for (const check of RESULTS.proxyDetection.checks) {
+      const icon = check.status === 'detected' ? '⚠' : check.status === 'clear' ? '✓' : check.status === 'error' ? '✕' : 'ℹ';
+      report += `\n  ${icon} ${check.name} [${check.status.toUpperCase()}]\n`;
+      report += `    ${check.detail.split('\n').join('\n    ')}\n`;
+    }
+
+    if (RESULTS.proxyDetection.localIPs && RESULTS.proxyDetection.localIPs.length > 0) {
+      report += `\n  Local IPs: ${RESULTS.proxyDetection.localIPs.join(', ')}\n`;
+    }
+
+    if (RESULTS.proxyDetection.resourceTiming) {
+      const rt = RESULTS.proxyDetection.resourceTiming;
+      report += `\n  Resource Timing Breakdown:\n`;
+      report += `    DNS: ${rt.dns}ms | TCP: ${rt.tcp}ms | SSL: ${rt.ssl}ms | TTFB: ${rt.ttfb}ms | Download: ${rt.download}ms | Total: ${rt.total}ms\n`;
+      report += `    Protocol: ${rt.nextHopProtocol} | Transfer: ${rt.transferSize} bytes\n`;
+    }
   }
 
   report += '\n── END OF REPORT ───────────────────────────────────────\n';
