@@ -808,6 +808,79 @@
     line-height: 1.5;
     word-break: break-all;
   }
+
+  /* Import mode */
+  .import-banner {
+    display: none;
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.1) 0%, rgba(59, 130, 246, 0.1) 100%);
+    border: 1px solid rgba(139, 92, 246, 0.3);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 24px;
+  }
+
+  .import-banner.active { display: block; }
+
+  .import-banner-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+
+  .import-banner-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--accent-purple);
+  }
+
+  .import-banner-title .import-badge {
+    background: rgba(139, 92, 246, 0.2);
+    border: 1px solid rgba(139, 92, 246, 0.4);
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .import-banner-close {
+    background: none;
+    border: 1px solid rgba(139, 92, 246, 0.3);
+    color: var(--accent-purple);
+    font-size: 11px;
+    padding: 4px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: var(--sans);
+    font-weight: 600;
+  }
+
+  .import-banner-close:hover {
+    background: rgba(139, 92, 246, 0.15);
+  }
+
+  .import-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 6px;
+    font-size: 11px;
+    font-family: var(--mono);
+  }
+
+  .import-meta-item {
+    display: flex;
+    gap: 6px;
+  }
+
+  .import-meta-item .imk { color: var(--text-muted); white-space: nowrap; }
+  .import-meta-item .imv { color: var(--text-primary); word-break: break-all; }
+
+  #importFileInput { display: none; }
 </style>
 </head>
 <body>
@@ -835,6 +908,21 @@
     <button class="btn btn-danger" id="btnCopy" onclick="copyReport()" style="display:none">
       ⎘ Copy to Clipboard
     </button>
+    <button class="btn btn-secondary" id="btnImport" onclick="document.getElementById('importFileInput').click()">
+      ↑ Import JSON
+    </button>
+    <input type="file" id="importFileInput" accept=".json,application/json" onchange="handleImportFile(event)">
+  </div>
+
+  <div class="import-banner" id="importBanner">
+    <div class="import-banner-header">
+      <div class="import-banner-title">
+        <span class="import-badge">Imported Report</span>
+        <span id="importSourceLabel"></span>
+      </div>
+      <button class="import-banner-close" onclick="clearImport()">✕ Clear &amp; Reset</button>
+    </div>
+    <div class="import-meta-grid" id="importMetaGrid"></div>
   </div>
 
   <div class="progress-container" id="progressContainer">
@@ -1592,7 +1680,7 @@ async function detectProxyConfiguration() {
     }
 
     // Check for injected content
-    if (body.includes('<script') || body.includes('<html') || body.includes('<iframe')) {
+    if (body.includes('<scr' + 'ipt') || body.includes('<ht' + 'ml') || body.includes('<ifr' + 'ame')) {
       issues.push('Response contains HTML/script tags — proxy may be injecting content');
     }
 
@@ -1720,21 +1808,6 @@ async function detectProxyConfiguration() {
 
   log(`Proxy detection complete: ${detectedCount}/${checks.length} indicators, ${proxyElapsed}ms`, detectedCount > 0 ? 'warn' : 'pass');
   return RESULTS.proxyDetection;
-}
-
-
-  const start = performance.now();
-  try {
-    // We use an image load trick to test DNS separately
-    await fetch(`https://${hostname}/favicon.ico`, {
-      mode: 'no-cors',
-      cache: 'no-store',
-      signal: AbortSignal.timeout(8000)
-    });
-  } catch (e) {
-    // Even errors tell us DNS resolved if we got a network error vs timeout
-  }
-  return performance.now() - start;
 }
 
 // Main endpoint test
@@ -2952,6 +3025,357 @@ function copyReport() {
     setTimeout(() => btn.innerHTML = orig, 2000);
   });
 }
+
+// ═══════════════════════════════════════════════════════
+// IMPORT FUNCTIONALITY
+// ═══════════════════════════════════════════════════════
+
+function handleImportFile(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = JSON.parse(e.target.result);
+      importResults(data, file.name);
+    } catch (err) {
+      alert('Invalid JSON file. Please select a valid diagnostic export file.\n\nError: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+  // Reset input so same file can be re-imported
+  event.target.value = '';
+}
+
+function importResults(data, fileName) {
+  // Validate structure
+  if (!data.tests || !Array.isArray(data.tests)) {
+    alert('Invalid diagnostic file: missing "tests" array. Please use a JSON file exported from this diagnostic tool.');
+    return;
+  }
+
+  // Load into RESULTS
+  RESULTS.environment = data.environment || {};
+  RESULTS.tests = data.tests || [];
+  RESULTS.findings = data.findings || [];
+  RESULTS.timestamp = data.timestamp || 'Unknown';
+  RESULTS.summary = data.summary || { total: 0, pass: 0, warn: 0, fail: 0 };
+  RESULTS.sslTest = data.sslTest || null;
+  RESULTS.redirectTest = data.redirectTest || null;
+  RESULTS.wsTest = data.wsTest || null;
+  RESULTS.proxyDetection = data.proxyDetection || null;
+
+  // Clear existing UI
+  document.getElementById('testSections').innerHTML = '';
+  document.getElementById('findingsList').innerHTML = '';
+  document.getElementById('findingsPanel').classList.remove('active');
+  document.getElementById('rawLog').innerHTML = '';
+  document.getElementById('proxyPanel').classList.remove('active', 'proxy-detected', 'proxy-clear', 'proxy-error');
+  document.getElementById('proxyChecks').innerHTML = '';
+  document.getElementById('progressContainer').classList.remove('active');
+
+  log(`═══ IMPORTED REPORT: ${fileName} ═══`, 'info');
+  log(`Timestamp: ${RESULTS.timestamp}`, 'info');
+  log(`Source IP: ${RESULTS.environment.publicIP || 'unknown'}`, 'info');
+
+  // Show import banner
+  const banner = document.getElementById('importBanner');
+  banner.classList.add('active');
+
+  document.getElementById('importSourceLabel').textContent =
+    `from ${RESULTS.environment.publicIP || 'unknown IP'} · ${RESULTS.environment.timezone || 'unknown TZ'}`;
+
+  const metaGrid = document.getElementById('importMetaGrid');
+  metaGrid.innerHTML = '';
+  const metaItems = [
+    ['File', fileName],
+    ['Captured', RESULTS.timestamp ? new Date(RESULTS.timestamp).toLocaleString() : 'Unknown'],
+    ['Public IP', RESULTS.environment.publicIP || 'Unknown'],
+    ['Timezone', RESULTS.environment.timezone || 'Unknown'],
+    ['Platform', RESULTS.environment.platform || 'Unknown'],
+    ['Browser', extractBrowser(RESULTS.environment.userAgent)],
+    ['Screen', RESULTS.environment.screenRes || 'Unknown'],
+    ['Connection', RESULTS.environment.connectionType || 'Unknown'],
+    ['Summary', `${RESULTS.summary.pass} pass · ${RESULTS.summary.warn} warn · ${RESULTS.summary.fail} fail`],
+  ];
+  for (const [k, v] of metaItems) {
+    metaGrid.innerHTML += `<div class="import-meta-item"><span class="imk">${k}:</span><span class="imv">${v}</span></div>`;
+  }
+
+  // Render environment
+  renderImportedEnvironment();
+
+  // Render proxy detection
+  renderImportedProxyDetection();
+
+  // Render all test sections
+  renderImportedTests();
+
+  // Render findings
+  renderImportedFindings();
+
+  // Update summary cards
+  document.getElementById('summaryGrid').classList.add('active');
+  document.getElementById('sumTotal').textContent = RESULTS.summary.total;
+  document.getElementById('sumPass').textContent = RESULTS.summary.pass;
+  document.getElementById('sumWarn').textContent = RESULTS.summary.warn;
+  document.getElementById('sumFail').textContent = RESULTS.summary.fail;
+
+  // Show export buttons (can re-export or copy from imported data)
+  document.getElementById('btnExportJson').style.display = '';
+  document.getElementById('btnExportText').style.display = '';
+  document.getElementById('btnCopy').style.display = '';
+
+  log(`═══ IMPORT COMPLETE: ${RESULTS.tests.length} tests loaded ═══`, 'pass');
+}
+
+function extractBrowser(ua) {
+  if (!ua) return 'Unknown';
+  if (ua.includes('Edg/')) return 'Edge ' + (ua.match(/Edg\/([\d.]+)/) || [])[1];
+  if (ua.includes('Chrome/')) return 'Chrome ' + (ua.match(/Chrome\/([\d.]+)/) || [])[1];
+  if (ua.includes('Firefox/')) return 'Firefox ' + (ua.match(/Firefox\/([\d.]+)/) || [])[1];
+  if (ua.includes('Safari/') && !ua.includes('Chrome')) return 'Safari ' + (ua.match(/Version\/([\d.]+)/) || [])[1];
+  return ua.substring(0, 60);
+}
+
+function renderImportedEnvironment() {
+  const grid = document.getElementById('envGrid');
+  grid.innerHTML = '';
+  for (const [key, val] of Object.entries(RESULTS.environment)) {
+    const label = key.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase());
+    grid.innerHTML += `<div class="env-item"><span class="key">${label}:</span><span class="val">${val}</span></div>`;
+  }
+  document.getElementById('envBar').classList.add('active');
+}
+
+function renderImportedProxyDetection() {
+  const pd = RESULTS.proxyDetection;
+  if (!pd || !pd.checks || pd.checks.length === 0) return;
+
+  const panel = document.getElementById('proxyPanel');
+  panel.classList.add('active');
+
+  const detectedCount = pd.detectedIndicators || pd.checks.filter(c => c.status === 'detected').length;
+
+  if (detectedCount > 0) {
+    panel.classList.add('proxy-detected');
+    const icon = document.getElementById('proxyStatusIcon');
+    icon.className = 'status-icon status-warn';
+    icon.textContent = '!';
+  } else {
+    panel.classList.add('proxy-clear');
+    const icon = document.getElementById('proxyStatusIcon');
+    icon.className = 'status-icon status-pass';
+    icon.textContent = '✓';
+  }
+
+  document.getElementById('proxyTiming').textContent =
+    `${detectedCount}/${pd.checks.length} indicators · ${pd.timing || '—'}ms`;
+
+  const container = document.getElementById('proxyChecks');
+  container.innerHTML = '';
+  for (const check of pd.checks) {
+    const iconCls = check.status === 'detected' ? 'pci-detected' :
+                    check.status === 'clear' ? 'pci-clear' :
+                    check.status === 'error' ? 'pci-error' : 'pci-info';
+    const iconSymbol = check.status === 'detected' ? '!' :
+                       check.status === 'clear' ? '✓' :
+                       check.status === 'error' ? '✕' : 'ℹ';
+
+    container.innerHTML += `
+      <div class="proxy-check-row">
+        <div class="proxy-check-icon ${iconCls}">${iconSymbol}</div>
+        <div class="proxy-check-content">
+          <div class="proxy-check-name">${escHtml(check.name)} <span class="tag tag-${check.status === 'detected' ? 'warn' : check.status === 'clear' ? 'pass' : check.status === 'error' ? 'fail' : 'info'}">${check.status}</span></div>
+          <div class="proxy-check-detail">${escHtml(check.detail)}</div>
+        </div>
+      </div>`;
+  }
+
+  // Auto-expand if issues found
+  if (detectedCount > 0) {
+    document.getElementById('proxyBody').classList.add('open');
+    document.getElementById('proxyChev').classList.add('open');
+  }
+}
+
+function renderImportedTests() {
+  const sectionsEl = document.getElementById('testSections');
+  sectionsEl.innerHTML = '';
+
+  for (const t of RESULTS.tests) {
+    // Create section shell
+    createTestSection({
+      id: t.id,
+      name: t.name,
+      desc: `${t.category || ''} ${t.critical ? '· Critical' : ''}`,
+      critical: t.critical
+    });
+
+    // Set status icon
+    const statusSymbol = t.status === 'pass' ? '✓' : t.status === 'warn' ? '!' : '✕';
+    setStatus(t.id, t.status, statusSymbol);
+    document.getElementById(`timing-${t.id}`).textContent = `${t.timing}ms`;
+
+    const sectionEl = document.getElementById(`section-${t.id}`);
+    sectionEl.classList.add(`result-${t.status}`);
+
+    // Ensure raw object exists for rendering
+    if (!t.raw) {
+      t.raw = {
+        request: {
+          method: 'GET',
+          url: t.url,
+          headers: { 'Accept': 'application/json, text/html, */*', 'X-Diagnostic-Request': 'azure-oauth-diag-v1' },
+          mode: 'cors',
+          redirect: 'follow',
+          cache: 'no-store',
+          timestamp: RESULTS.timestamp || 'N/A'
+        },
+        response: {
+          status: t.httpStatus,
+          statusText: t.httpStatusText || '',
+          headers: t.headers || {},
+          headersRaw: '',
+          body: t.details ? t.details.bodyPreview || null : null,
+          bodyTruncated: false,
+          bodyLength: t.details ? t.details.bodyLength || 0 : 0,
+          type: null,
+          url: t.redirectURL || t.url,
+          redirected: t.redirected || false,
+          ok: t.httpStatus >= 200 && t.httpStatus < 300,
+          timestamp: null
+        },
+        noCors: t.details && t.details.noCorsReachable !== undefined ? {
+          reachable: t.details.noCorsReachable,
+          timing: t.details.noCorsTime || 0,
+          type: 'opaque',
+          status: 0,
+          url: t.url,
+          timestamp: null,
+          note: t.details.note || '',
+          error: t.details.noCorsError || null,
+          errorName: null
+        } : null,
+        error: t.error ? { name: 'Error', message: t.error, stack: null } : null,
+        timings: {
+          start: RESULTS.timestamp || null,
+          headersReceived: t.timing || null,
+          bodyReceived: null,
+          total: t.timing || null
+        }
+      };
+    }
+
+    // Render full details
+    renderTestDetails(t.id, t);
+
+    // Auto-expand failed tests
+    if (t.status === 'fail') {
+      document.getElementById(`body-${t.id}`).classList.add('open');
+      document.getElementById(`chev-${t.id}`).classList.add('open');
+    }
+
+    log(`Loaded: ${t.name} → ${t.status.toUpperCase()} (${t.timing}ms, HTTP ${t.httpStatus || 'N/A'})`,
+      t.status === 'pass' ? 'pass' : t.status === 'warn' ? 'warn' : 'fail');
+  }
+}
+
+function renderImportedFindings() {
+  if (!RESULTS.findings || RESULTS.findings.length === 0) return;
+
+  const panel = document.getElementById('findingsPanel');
+  const list = document.getElementById('findingsList');
+  list.innerHTML = '';
+  panel.classList.add('active');
+
+  for (const f of RESULTS.findings) {
+    const cls = f.type === 'critical' ? 'finding-critical' : f.type === 'warning' ? 'finding-warning' : 'finding-info';
+    list.innerHTML += `<div class="finding-item ${cls}"><strong>${f.title || ''}</strong>${f.msg}</div>`;
+  }
+}
+
+function clearImport() {
+  // Reset everything
+  RESULTS.environment = {};
+  RESULTS.tests = [];
+  RESULTS.findings = [];
+  RESULTS.timestamp = null;
+  RESULTS.summary = { total: 0, pass: 0, warn: 0, fail: 0 };
+  RESULTS.sslTest = null;
+  RESULTS.redirectTest = null;
+  RESULTS.wsTest = null;
+  RESULTS.proxyDetection = null;
+
+  document.getElementById('testSections').innerHTML = '';
+  document.getElementById('findingsList').innerHTML = '';
+  document.getElementById('findingsPanel').classList.remove('active');
+  document.getElementById('rawLog').innerHTML = '';
+  document.getElementById('summaryGrid').classList.remove('active');
+  document.getElementById('envBar').classList.remove('active');
+  document.getElementById('envGrid').innerHTML = '';
+  document.getElementById('progressContainer').classList.remove('active');
+
+  document.getElementById('proxyPanel').classList.remove('active', 'proxy-detected', 'proxy-clear', 'proxy-error');
+  document.getElementById('proxyChecks').innerHTML = '';
+  document.getElementById('proxyStatusIcon').className = 'status-icon status-pending';
+  document.getElementById('proxyStatusIcon').textContent = '◦';
+  document.getElementById('proxyBody').classList.remove('open');
+  document.getElementById('proxyChev').classList.remove('open');
+
+  document.getElementById('importBanner').classList.remove('active');
+  document.getElementById('importMetaGrid').innerHTML = '';
+
+  document.getElementById('btnExportJson').style.display = 'none';
+  document.getElementById('btnExportText').style.display = 'none';
+  document.getElementById('btnCopy').style.display = 'none';
+
+  document.getElementById('sumTotal').textContent = '0';
+  document.getElementById('sumPass').textContent = '0';
+  document.getElementById('sumWarn').textContent = '0';
+  document.getElementById('sumFail').textContent = '0';
+}
+
+// Allow drag & drop import
+document.addEventListener('DOMContentLoaded', function() {
+  const container = document.querySelector('.container');
+
+  container.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    container.style.outline = '2px dashed rgba(139, 92, 246, 0.5)';
+    container.style.outlineOffset = '-4px';
+  });
+
+  container.addEventListener('dragleave', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    container.style.outline = 'none';
+  });
+
+  container.addEventListener('drop', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    container.style.outline = 'none';
+
+    const file = e.dataTransfer.files[0];
+    if (file && (file.type === 'application/json' || file.name.endsWith('.json'))) {
+      const reader = new FileReader();
+      reader.onload = function(ev) {
+        try {
+          const data = JSON.parse(ev.target.result);
+          importResults(data, file.name);
+        } catch (err) {
+          alert('Invalid JSON file.\n\nError: ' + err.message);
+        }
+      };
+      reader.readAsText(file);
+    } else {
+      alert('Please drop a .json diagnostic export file.');
+    }
+  });
+});
 </script>
 
 </body>
