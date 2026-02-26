@@ -1,0 +1,1605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Azure OAuth Network Diagnostic Tool</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-primary: #0a0e17;
+    --bg-secondary: #111827;
+    --bg-card: #161f33;
+    --bg-card-hover: #1c2740;
+    --border: #1e2d4a;
+    --border-active: #2563eb;
+    --text-primary: #e2e8f0;
+    --text-secondary: #8899b4;
+    --text-muted: #4a5b78;
+    --accent-blue: #3b82f6;
+    --accent-cyan: #06b6d4;
+    --accent-green: #10b981;
+    --accent-red: #ef4444;
+    --accent-yellow: #f59e0b;
+    --accent-orange: #f97316;
+    --accent-purple: #8b5cf6;
+    --glow-blue: rgba(59, 130, 246, 0.15);
+    --glow-green: rgba(16, 185, 129, 0.15);
+    --glow-red: rgba(239, 68, 68, 0.15);
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'IBM Plex Sans', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Background grid effect */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      linear-gradient(rgba(59, 130, 246, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(59, 130, 246, 0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    position: relative;
+    z-index: 1;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 24px 20px 60px;
+  }
+
+  /* Header */
+  .header {
+    text-align: center;
+    padding: 40px 0 32px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 32px;
+  }
+
+  .header-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.25);
+    border-radius: 20px;
+    padding: 6px 16px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent-blue);
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+
+  .header-badge .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-blue);
+    animation: pulse-dot 2s ease infinite;
+  }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, #e2e8f0 0%, #3b82f6 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .header p {
+    color: var(--text-secondary);
+    font-size: 14px;
+    max-width: 600px;
+    margin: 0 auto;
+    line-height: 1.6;
+  }
+
+  /* Control bar */
+  .control-bar {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 32px;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 10px 24px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .btn-primary {
+    background: var(--accent-blue);
+    border-color: var(--accent-blue);
+    color: white;
+  }
+
+  .btn-primary:hover {
+    background: #2563eb;
+    box-shadow: 0 0 24px rgba(59, 130, 246, 0.3);
+  }
+
+  .btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    box-shadow: none;
+  }
+
+  .btn-secondary {
+    background: var(--bg-card);
+    color: var(--text-primary);
+  }
+
+  .btn-secondary:hover {
+    background: var(--bg-card-hover);
+    border-color: var(--text-muted);
+  }
+
+  .btn-danger {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.3);
+    color: var(--accent-red);
+  }
+
+  .btn-danger:hover {
+    background: rgba(239, 68, 68, 0.2);
+  }
+
+  .spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Progress bar */
+  .progress-container {
+    margin-bottom: 24px;
+    display: none;
+  }
+
+  .progress-container.active { display: block; }
+
+  .progress-info {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-family: var(--mono);
+  }
+
+  .progress-bar {
+    height: 4px;
+    background: var(--bg-card);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-blue), var(--accent-cyan));
+    border-radius: 4px;
+    transition: width 0.3s ease;
+    width: 0%;
+  }
+
+  /* Summary cards */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 28px;
+    display: none;
+  }
+
+  .summary-grid.active { display: grid; }
+
+  .summary-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    text-align: center;
+  }
+
+  .summary-card .count {
+    font-size: 32px;
+    font-weight: 700;
+    font-family: var(--mono);
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+
+  .summary-card .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-secondary);
+  }
+
+  .count-pass { color: var(--accent-green); }
+  .count-fail { color: var(--accent-red); }
+  .count-warn { color: var(--accent-yellow); }
+  .count-total { color: var(--accent-blue); }
+
+  /* Environment info */
+  .env-bar {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 24px;
+    display: none;
+  }
+
+  .env-bar.active { display: block; }
+
+  .env-bar h3 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+  }
+
+  .env-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 8px;
+  }
+
+  .env-item {
+    display: flex;
+    gap: 8px;
+    font-size: 12px;
+    font-family: var(--mono);
+  }
+
+  .env-item .key {
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  .env-item .val {
+    color: var(--text-primary);
+    word-break: break-all;
+  }
+
+  /* Test sections */
+  .test-section {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 16px;
+    overflow: hidden;
+    transition: border-color 0.3s;
+  }
+
+  .test-section.result-pass { border-left: 3px solid var(--accent-green); }
+  .test-section.result-fail { border-left: 3px solid var(--accent-red); }
+  .test-section.result-warn { border-left: 3px solid var(--accent-yellow); }
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
+  }
+
+  .section-header:hover { background: var(--bg-card-hover); }
+
+  .section-title-area {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .status-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .status-pending {
+    background: rgba(75, 85, 99, 0.3);
+    border: 1px solid #4b5563;
+    color: #9ca3af;
+  }
+
+  .status-running {
+    background: rgba(59, 130, 246, 0.2);
+    border: 1px solid var(--accent-blue);
+    color: var(--accent-blue);
+    animation: pulse-dot 1s ease infinite;
+  }
+
+  .status-pass {
+    background: rgba(16, 185, 129, 0.15);
+    border: 1px solid var(--accent-green);
+    color: var(--accent-green);
+  }
+
+  .status-fail {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid var(--accent-red);
+    color: var(--accent-red);
+  }
+
+  .status-warn {
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid var(--accent-yellow);
+    color: var(--accent-yellow);
+  }
+
+  .section-title h3 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+
+  .section-title p {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .section-timing {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .chevron {
+    transition: transform 0.2s;
+    color: var(--text-muted);
+  }
+
+  .chevron.open { transform: rotate(180deg); }
+
+  .section-body {
+    display: none;
+    padding: 0 20px 16px;
+    border-top: 1px solid var(--border);
+  }
+
+  .section-body.open {
+    display: block;
+    padding-top: 16px;
+  }
+
+  /* Detail tables */
+  .detail-group {
+    margin-bottom: 16px;
+  }
+
+  .detail-group-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--accent-cyan);
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+
+  .detail-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .detail-table tr {
+    border-bottom: 1px solid rgba(30, 45, 74, 0.5);
+  }
+
+  .detail-table tr:last-child { border-bottom: none; }
+
+  .detail-table td {
+    padding: 6px 0;
+    font-size: 12px;
+    font-family: var(--mono);
+    vertical-align: top;
+  }
+
+  .detail-table td:first-child {
+    color: var(--text-muted);
+    width: 200px;
+    padding-right: 16px;
+    white-space: nowrap;
+  }
+
+  .detail-table td:last-child {
+    color: var(--text-primary);
+    word-break: break-all;
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .tag-pass { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); border: 1px solid rgba(16, 185, 129, 0.3); }
+  .tag-fail { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); border: 1px solid rgba(239, 68, 68, 0.3); }
+  .tag-warn { background: rgba(245, 158, 11, 0.15); color: var(--accent-yellow); border: 1px solid rgba(245, 158, 11, 0.3); }
+  .tag-info { background: rgba(59, 130, 246, 0.15); color: var(--accent-blue); border: 1px solid rgba(59, 130, 246, 0.3); }
+
+  /* Findings panel */
+  .findings-panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-top: 24px;
+    display: none;
+  }
+
+  .findings-panel.active { display: block; }
+
+  .findings-panel h2 {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .finding-item {
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .finding-critical {
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.2);
+    color: #fca5a5;
+  }
+
+  .finding-warning {
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.2);
+    color: #fcd34d;
+  }
+
+  .finding-info {
+    background: rgba(59, 130, 246, 0.08);
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    color: #93c5fd;
+  }
+
+  .finding-item strong {
+    display: block;
+    margin-bottom: 2px;
+  }
+
+  /* Raw log */
+  .raw-log {
+    background: #0d1117;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: #8b949e;
+    max-height: 300px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin-top: 16px;
+    display: none;
+  }
+
+  .raw-log.active { display: block; }
+
+  .raw-log .log-pass { color: var(--accent-green); }
+  .raw-log .log-fail { color: var(--accent-red); }
+  .raw-log .log-warn { color: var(--accent-yellow); }
+  .raw-log .log-info { color: var(--accent-cyan); }
+  .raw-log .log-time { color: var(--text-muted); }
+
+  /* Export area */
+  .export-area {
+    margin-top: 24px;
+    display: none;
+    text-align: center;
+  }
+
+  .export-area.active {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  /* Responsive */
+  @media (max-width: 640px) {
+    .container { padding: 16px 12px 40px; }
+    .header h1 { font-size: 22px; }
+    .summary-grid { grid-template-columns: repeat(2, 1fr); }
+    .env-grid { grid-template-columns: 1fr; }
+    .detail-table td:first-child { width: 120px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="header">
+    <div class="header-badge"><span class="dot"></span> Network Diagnostic</div>
+    <h1>Azure OAuth Network Diagnostic</h1>
+    <p>Tests connectivity, headers, SSL inspection, and redirect behavior across all Microsoft authentication and Graph API endpoints from your current network.</p>
+  </div>
+
+  <div class="control-bar">
+    <button class="btn btn-primary" id="btnRun" onclick="runAllTests()">
+      ▶ Run Full Diagnostic
+    </button>
+    <button class="btn btn-secondary" id="btnLog" onclick="toggleRawLog()">
+      ◈ Toggle Raw Log
+    </button>
+    <button class="btn btn-secondary" id="btnExportJson" onclick="exportJSON()" style="display:none">
+      ↓ Export JSON
+    </button>
+    <button class="btn btn-secondary" id="btnExportText" onclick="exportText()" style="display:none">
+      ↓ Export Report
+    </button>
+    <button class="btn btn-danger" id="btnCopy" onclick="copyReport()" style="display:none">
+      ⎘ Copy to Clipboard
+    </button>
+  </div>
+
+  <div class="progress-container" id="progressContainer">
+    <div class="progress-info">
+      <span id="progressLabel">Initializing...</span>
+      <span id="progressCount">0/0</span>
+    </div>
+    <div class="progress-bar">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+  </div>
+
+  <div class="summary-grid" id="summaryGrid">
+    <div class="summary-card">
+      <div class="count count-total" id="sumTotal">0</div>
+      <div class="label">Tests Run</div>
+    </div>
+    <div class="summary-card">
+      <div class="count count-pass" id="sumPass">0</div>
+      <div class="label">Passed</div>
+    </div>
+    <div class="summary-card">
+      <div class="count count-warn" id="sumWarn">0</div>
+      <div class="label">Warnings</div>
+    </div>
+    <div class="summary-card">
+      <div class="count count-fail" id="sumFail">0</div>
+      <div class="label">Failed</div>
+    </div>
+  </div>
+
+  <div class="env-bar" id="envBar">
+    <h3>Environment Information</h3>
+    <div class="env-grid" id="envGrid"></div>
+  </div>
+
+  <div id="testSections"></div>
+
+  <div class="findings-panel" id="findingsPanel">
+    <h2>⚑ Diagnostic Findings</h2>
+    <div id="findingsList"></div>
+  </div>
+
+  <div class="raw-log" id="rawLog"></div>
+</div>
+
+<script>
+const RESULTS = {
+  environment: {},
+  tests: [],
+  findings: [],
+  timestamp: null,
+  summary: { total: 0, pass: 0, warn: 0, fail: 0 }
+};
+
+// All endpoints to test
+const ENDPOINTS = [
+  {
+    id: 'login-ms',
+    name: 'login.microsoftonline.com',
+    desc: 'Primary Azure AD Authentication',
+    url: 'https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration',
+    critical: true,
+    category: 'auth'
+  },
+  {
+    id: 'login-ms2',
+    name: 'login.microsoft.com',
+    desc: 'Secondary Authentication Endpoint',
+    url: 'https://login.microsoft.com/common/v2.0/.well-known/openid-configuration',
+    critical: true,
+    category: 'auth'
+  },
+  {
+    id: 'device-login',
+    name: 'device.login.microsoftonline.com',
+    desc: 'Device Code Flow Authentication',
+    url: 'https://device.login.microsoftonline.com/',
+    critical: true,
+    category: 'auth'
+  },
+  {
+    id: 'graph-api',
+    name: 'graph.microsoft.com',
+    desc: 'Microsoft Graph API',
+    url: 'https://graph.microsoft.com/v1.0/$metadata',
+    critical: true,
+    category: 'api'
+  },
+  {
+    id: 'graph-beta',
+    name: 'graph.microsoft.com (beta)',
+    desc: 'Microsoft Graph Beta API',
+    url: 'https://graph.microsoft.com/beta/$metadata',
+    critical: false,
+    category: 'api'
+  },
+  {
+    id: 'sts-windows',
+    name: 'sts.windows.net',
+    desc: 'Security Token Service',
+    url: 'https://sts.windows.net/common/.well-known/openid-configuration',
+    critical: true,
+    category: 'auth'
+  },
+  {
+    id: 'login-windows',
+    name: 'login.windows.net',
+    desc: 'Legacy Authentication Endpoint',
+    url: 'https://login.windows.net/common/.well-known/openid-configuration',
+    critical: false,
+    category: 'auth'
+  },
+  {
+    id: 'msauth-cdn',
+    name: 'aadcdn.msauth.net',
+    desc: 'MSAL Authentication Library CDN',
+    url: 'https://aadcdn.msauth.net/',
+    critical: false,
+    category: 'cdn'
+  },
+  {
+    id: 'msftauth-cdn',
+    name: 'aadcdn.msftauth.net',
+    desc: 'Microsoft Auth CDN',
+    url: 'https://aadcdn.msftauth.net/',
+    critical: false,
+    category: 'cdn'
+  },
+  {
+    id: 'management-azure',
+    name: 'management.azure.com',
+    desc: 'Azure Management API',
+    url: 'https://management.azure.com/providers?api-version=2021-04-01',
+    critical: false,
+    category: 'api'
+  },
+  {
+    id: 'adminconsent',
+    name: 'Admin Consent Endpoint',
+    desc: 'OAuth2 Admin Consent URL Pattern',
+    url: 'https://login.microsoftonline.com/common/adminconsent',
+    critical: true,
+    category: 'oauth'
+  },
+  {
+    id: 'token-endpoint',
+    name: 'Token Endpoint',
+    desc: 'OAuth2 Token Exchange',
+    url: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+    critical: true,
+    category: 'oauth'
+  },
+  {
+    id: 'authorize-endpoint',
+    name: 'Authorize Endpoint',
+    desc: 'OAuth2 Authorization',
+    url: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+    critical: true,
+    category: 'oauth'
+  }
+];
+
+// Utility functions
+function log(msg, level = 'info') {
+  const el = document.getElementById('rawLog');
+  const time = new Date().toISOString().substr(11, 12);
+  const cls = `log-${level}`;
+  el.innerHTML += `<span class="log-time">[${time}]</span> <span class="${cls}">${msg}</span>\n`;
+  el.scrollTop = el.scrollHeight;
+}
+
+function updateProgress(current, total, label) {
+  document.getElementById('progressLabel').textContent = label;
+  document.getElementById('progressCount').textContent = `${current}/${total}`;
+  document.getElementById('progressFill').style.width = `${(current / total) * 100}%`;
+}
+
+function createTestSection(endpoint) {
+  const html = `
+    <div class="test-section" id="section-${endpoint.id}">
+      <div class="section-header" onclick="toggleSection('${endpoint.id}')">
+        <div class="section-title-area">
+          <div class="status-icon status-pending" id="icon-${endpoint.id}">◦</div>
+          <div class="section-title">
+            <h3>${endpoint.name}</h3>
+            <p>${endpoint.desc} ${endpoint.critical ? '· <span style="color: var(--accent-orange)">Critical</span>' : ''}</p>
+          </div>
+        </div>
+        <div class="section-timing">
+          <span id="timing-${endpoint.id}">—</span>
+          <span class="chevron" id="chev-${endpoint.id}">▾</span>
+        </div>
+      </div>
+      <div class="section-body" id="body-${endpoint.id}">
+        <div id="details-${endpoint.id}"></div>
+      </div>
+    </div>`;
+  document.getElementById('testSections').innerHTML += html;
+}
+
+function toggleSection(id) {
+  const body = document.getElementById(`body-${id}`);
+  const chev = document.getElementById(`chev-${id}`);
+  body.classList.toggle('open');
+  chev.classList.toggle('open');
+}
+
+function toggleRawLog() {
+  document.getElementById('rawLog').classList.toggle('active');
+}
+
+function setStatus(id, status, symbol) {
+  const icon = document.getElementById(`icon-${id}`);
+  icon.className = `status-icon status-${status}`;
+  icon.textContent = symbol;
+}
+
+function collectEnvironment() {
+  const env = {
+    userAgent: navigator.userAgent,
+    platform: navigator.platform,
+    language: navigator.language,
+    cookiesEnabled: navigator.cookieEnabled,
+    doNotTrack: navigator.doNotTrack,
+    timestamp: new Date().toISOString(),
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    screenRes: `${screen.width}x${screen.height}`,
+    windowSize: `${window.innerWidth}x${window.innerHeight}`,
+    protocol: location.protocol,
+    online: navigator.onLine,
+    connectionType: navigator.connection ? navigator.connection.effectiveType : 'unknown',
+    serviceWorker: 'serviceWorker' in navigator ? 'supported' : 'not supported',
+    webRTC: 'RTCPeerConnection' in window ? 'supported' : 'not supported',
+  };
+
+  RESULTS.environment = env;
+
+  const grid = document.getElementById('envGrid');
+  grid.innerHTML = '';
+  for (const [key, val] of Object.entries(env)) {
+    const label = key.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase());
+    grid.innerHTML += `<div class="env-item"><span class="key">${label}:</span><span class="val">${val}</span></div>`;
+  }
+
+  document.getElementById('envBar').classList.add('active');
+  log(`Environment collected: ${env.userAgent}`, 'info');
+}
+
+// Attempt to detect public IP for comparison
+async function detectPublicIP() {
+  try {
+    const resp = await fetch('https://httpbin.org/ip', { mode: 'cors' });
+    if (resp.ok) {
+      const data = await resp.json();
+      RESULTS.environment.publicIP = data.origin;
+      const grid = document.getElementById('envGrid');
+      grid.innerHTML += `<div class="env-item"><span class="key">Public IP:</span><span class="val">${data.origin}</span></div>`;
+      log(`Public IP detected: ${data.origin}`, 'pass');
+    }
+  } catch (e) {
+    RESULTS.environment.publicIP = 'Could not detect (blocked)';
+    log('Could not detect public IP — httpbin blocked', 'warn');
+    const grid = document.getElementById('envGrid');
+    grid.innerHTML += `<div class="env-item"><span class="key">Public IP:</span><span class="val">Blocked (external API inaccessible)</span></div>`;
+  }
+}
+
+// DNS Resolution test via timing
+async function testDNSResolution(hostname) {
+  const start = performance.now();
+  try {
+    // We use an image load trick to test DNS separately
+    await fetch(`https://${hostname}/favicon.ico`, {
+      mode: 'no-cors',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(8000)
+    });
+  } catch (e) {
+    // Even errors tell us DNS resolved if we got a network error vs timeout
+  }
+  return performance.now() - start;
+}
+
+// Main endpoint test
+async function testEndpoint(endpoint) {
+  const testResult = {
+    id: endpoint.id,
+    name: endpoint.name,
+    url: endpoint.url,
+    critical: endpoint.critical,
+    category: endpoint.category,
+    status: 'pending',
+    timing: null,
+    httpStatus: null,
+    httpStatusText: null,
+    headers: {},
+    corsHeaders: {},
+    redirected: false,
+    redirectURL: null,
+    error: null,
+    sslIssues: [],
+    proxyIndicators: [],
+    details: {}
+  };
+
+  setStatus(endpoint.id, 'running', '●');
+  log(`Testing: ${endpoint.url}`, 'info');
+
+  const start = performance.now();
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
+    const response = await fetch(endpoint.url, {
+      method: 'GET',
+      mode: 'cors',
+      cache: 'no-store',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        'Accept': 'application/json, text/html, */*',
+        'X-Diagnostic-Request': 'azure-oauth-diag-v1'
+      }
+    });
+
+    clearTimeout(timeout);
+    const elapsed = performance.now() - start;
+    testResult.timing = Math.round(elapsed);
+    testResult.httpStatus = response.status;
+    testResult.httpStatusText = response.statusText;
+    testResult.redirected = response.redirected;
+    testResult.redirectURL = response.redirected ? response.url : null;
+
+    // Capture all response headers
+    response.headers.forEach((value, key) => {
+      testResult.headers[key] = value;
+      const kl = key.toLowerCase();
+      // Check for proxy indicators
+      if (kl.includes('proxy') || kl.includes('via') || kl.includes('x-forwarded') ||
+          kl.includes('x-cache') || kl.includes('x-real-ip') || kl.includes('x-bluecoat') ||
+          kl.includes('x-zscaler') || kl.includes('x-squid') || kl.includes('front-end-https') ||
+          kl.includes('x-firewall') || kl.includes('x-content-type-options') === false && kl.startsWith('x-')) {
+        testResult.proxyIndicators.push({ header: key, value: value });
+      }
+      // Check for CORS
+      if (kl.startsWith('access-control')) {
+        testResult.corsHeaders[key] = value;
+      }
+    });
+
+    // Try to read body for additional info
+    try {
+      const text = await response.text();
+      testResult.details.bodyLength = text.length;
+      testResult.details.bodyPreview = text.substring(0, 500);
+
+      // Check if body contains proxy/firewall block pages
+      const lower = text.toLowerCase();
+      if (lower.includes('blocked') || lower.includes('access denied') ||
+          lower.includes('firewall') || lower.includes('proxy') ||
+          lower.includes('websense') || lower.includes('fortigate') ||
+          lower.includes('palo alto') || lower.includes('bluecoat') ||
+          lower.includes('zscaler') || lower.includes('sophos') ||
+          lower.includes('barracuda') || lower.includes('content filtering')) {
+        testResult.sslIssues.push('Response body contains firewall/proxy block page indicators');
+        testResult.proxyIndicators.push({ header: 'body-content', value: 'Contains proxy/firewall keywords' });
+      }
+    } catch (bodyErr) {
+      testResult.details.bodyError = bodyErr.message;
+    }
+
+    // Determine status
+    if (response.status >= 200 && response.status < 400) {
+      testResult.status = 'pass';
+      if (testResult.proxyIndicators.length > 0) {
+        testResult.status = 'warn';
+      }
+    } else if (response.status === 401 || response.status === 403) {
+      // Expected for some endpoints without auth
+      testResult.status = endpoint.id === 'token-endpoint' || endpoint.id === 'authorize-endpoint' || endpoint.id === 'adminconsent' ? 'pass' : 'warn';
+      testResult.details.note = 'Auth error is expected for unauthenticated diagnostic requests';
+    } else {
+      testResult.status = 'fail';
+    }
+
+    // Check timing anomalies (SSL inspection adds latency)
+    if (elapsed > 5000) {
+      testResult.sslIssues.push(`High latency (${Math.round(elapsed)}ms) — possible SSL inspection delay`);
+      if (testResult.status === 'pass') testResult.status = 'warn';
+    }
+
+  } catch (error) {
+    const elapsed = performance.now() - start;
+    testResult.timing = Math.round(elapsed);
+    testResult.error = error.message || error.toString();
+
+    if (error.name === 'AbortError') {
+      testResult.status = 'fail';
+      testResult.error = 'Request timed out (15s) — endpoint likely blocked';
+      log(`TIMEOUT: ${endpoint.url}`, 'fail');
+    } else if (error.message && error.message.includes('Failed to fetch')) {
+      testResult.status = 'fail';
+      testResult.error = 'Failed to fetch — CORS blocked, network error, or endpoint unreachable';
+      log(`BLOCKED: ${endpoint.url} — ${error.message}`, 'fail');
+    } else {
+      testResult.status = 'fail';
+      log(`ERROR: ${endpoint.url} — ${error.message}`, 'fail');
+    }
+  }
+
+  // Now run additional no-cors test if main test failed
+  if (testResult.status === 'fail') {
+    try {
+      const start2 = performance.now();
+      await fetch(endpoint.url, { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(10000) });
+      const elapsed2 = performance.now() - start2;
+      testResult.details.noCorsReachable = true;
+      testResult.details.noCorsTime = Math.round(elapsed2);
+      testResult.status = 'warn';
+      testResult.details.note = `CORS failed but endpoint reachable via no-cors (${Math.round(elapsed2)}ms). This is normal for some endpoints.`;
+      log(`  ↳ no-cors fallback OK for ${endpoint.name} (${Math.round(elapsed2)}ms)`, 'warn');
+    } catch (e2) {
+      testResult.details.noCorsReachable = false;
+      testResult.details.noCorsError = e2.message;
+      log(`  ↳ no-cors also failed for ${endpoint.name}: ${e2.message}`, 'fail');
+    }
+  }
+
+  // Update UI
+  const statusSymbol = testResult.status === 'pass' ? '✓' : testResult.status === 'warn' ? '!' : '✕';
+  setStatus(endpoint.id, testResult.status, statusSymbol);
+  document.getElementById(`timing-${endpoint.id}`).textContent = `${testResult.timing}ms`;
+
+  const sectionEl = document.getElementById(`section-${endpoint.id}`);
+  sectionEl.classList.add(`result-${testResult.status}`);
+
+  // Build detail HTML
+  renderTestDetails(endpoint.id, testResult);
+
+  log(`Result: ${endpoint.name} → ${testResult.status.toUpperCase()} (${testResult.timing}ms, HTTP ${testResult.httpStatus || 'N/A'})`, testResult.status === 'pass' ? 'pass' : testResult.status === 'warn' ? 'warn' : 'fail');
+
+  return testResult;
+}
+
+function renderTestDetails(id, result) {
+  let html = '';
+
+  // Connection info
+  html += `<div class="detail-group">
+    <div class="detail-group-title">Connection Details</div>
+    <table class="detail-table">
+      <tr><td>URL</td><td>${result.url}</td></tr>
+      <tr><td>Status</td><td><span class="tag tag-${result.status}">${result.status}</span> ${result.httpStatus ? `HTTP ${result.httpStatus} ${result.httpStatusText}` : result.error || ''}</td></tr>
+      <tr><td>Response Time</td><td>${result.timing}ms ${result.timing > 3000 ? '<span class="tag tag-warn">SLOW</span>' : ''}</td></tr>
+      <tr><td>Redirected</td><td>${result.redirected ? `Yes → ${result.redirectURL}` : 'No'}</td></tr>
+      ${result.details.noCorsReachable !== undefined ? `<tr><td>No-CORS Reachable</td><td>${result.details.noCorsReachable ? 'Yes (' + result.details.noCorsTime + 'ms)' : 'No — ' + (result.details.noCorsError || '')}</td></tr>` : ''}
+      ${result.details.note ? `<tr><td>Note</td><td>${result.details.note}</td></tr>` : ''}
+      ${result.details.bodyLength !== undefined ? `<tr><td>Body Length</td><td>${result.details.bodyLength} bytes</td></tr>` : ''}
+    </table>
+  </div>`;
+
+  // Response Headers
+  const headerKeys = Object.keys(result.headers);
+  if (headerKeys.length > 0) {
+    html += `<div class="detail-group">
+      <div class="detail-group-title">Response Headers (${headerKeys.length})</div>
+      <table class="detail-table">`;
+    for (const [k, v] of Object.entries(result.headers)) {
+      const isProxy = result.proxyIndicators.some(p => p.header === k);
+      html += `<tr><td>${k} ${isProxy ? '<span class="tag tag-warn">PROXY</span>' : ''}</td><td>${v}</td></tr>`;
+    }
+    html += `</table></div>`;
+  }
+
+  // Proxy indicators
+  if (result.proxyIndicators.length > 0) {
+    html += `<div class="detail-group">
+      <div class="detail-group-title">⚠ Proxy / Firewall Indicators</div>
+      <table class="detail-table">`;
+    for (const p of result.proxyIndicators) {
+      html += `<tr><td>${p.header}</td><td>${p.value}</td></tr>`;
+    }
+    html += `</table></div>`;
+  }
+
+  // SSL issues
+  if (result.sslIssues.length > 0) {
+    html += `<div class="detail-group">
+      <div class="detail-group-title">⚠ SSL / TLS Observations</div>
+      <table class="detail-table">`;
+    for (const issue of result.sslIssues) {
+      html += `<tr><td colspan="2">${issue}</td></tr>`;
+    }
+    html += `</table></div>`;
+  }
+
+  // Body preview (if openid config)
+  if (result.details.bodyPreview && result.details.bodyPreview.startsWith('{')) {
+    try {
+      const json = JSON.parse(result.details.bodyPreview.length < 5000 ? result.details.bodyPreview : '{}');
+      if (json.issuer || json.token_endpoint) {
+        html += `<div class="detail-group">
+          <div class="detail-group-title">OpenID Configuration (Verified)</div>
+          <table class="detail-table">
+            ${json.issuer ? `<tr><td>Issuer</td><td>${json.issuer}</td></tr>` : ''}
+            ${json.token_endpoint ? `<tr><td>Token Endpoint</td><td>${json.token_endpoint}</td></tr>` : ''}
+            ${json.authorization_endpoint ? `<tr><td>Authorize Endpoint</td><td>${json.authorization_endpoint}</td></tr>` : ''}
+            ${json.device_authorization_endpoint ? `<tr><td>Device Auth Endpoint</td><td>${json.device_authorization_endpoint}</td></tr>` : ''}
+          </table>
+        </div>`;
+      }
+    } catch (e) {}
+  }
+
+  document.getElementById(`details-${id}`).innerHTML = html;
+}
+
+// SSL Inspection Detection test
+async function testSSLInspection() {
+  const result = {
+    id: 'ssl-inspection',
+    name: 'SSL Inspection Detection',
+    status: 'pending',
+    findings: []
+  };
+
+  log('Running SSL inspection detection...', 'info');
+
+  // Test 1: Certificate transparency check via headers
+  try {
+    const resp = await fetch('https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration', {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(10000)
+    });
+
+    // Check for headers that indicate SSL inspection
+    const suspectHeaders = [];
+    resp.headers.forEach((val, key) => {
+      const kl = key.toLowerCase();
+      if (kl === 'via' || kl.includes('proxy') || kl.includes('x-bluecoat') ||
+          kl.includes('x-zscaler') || kl.includes('x-fortinet') || kl.includes('x-palo') ||
+          kl.includes('x-sophos') || kl.includes('x-squid') || kl.includes('x-barracuda')) {
+        suspectHeaders.push(`${key}: ${val}`);
+      }
+    });
+
+    if (suspectHeaders.length > 0) {
+      result.findings.push({
+        type: 'critical',
+        msg: `Proxy/SSL inspection headers detected: ${suspectHeaders.join(', ')}`
+      });
+    }
+
+    // Test 2: Timing comparison - SSL inspection adds significant latency
+    const timings = [];
+    for (let i = 0; i < 3; i++) {
+      const s = performance.now();
+      await fetch('https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration', {
+        cache: 'no-store',
+        mode: 'cors',
+        signal: AbortSignal.timeout(10000)
+      });
+      timings.push(performance.now() - s);
+    }
+    const avgTime = timings.reduce((a, b) => a + b) / timings.length;
+    const variance = Math.max(...timings) - Math.min(...timings);
+
+    result.findings.push({
+      type: avgTime > 2000 ? 'warning' : 'info',
+      msg: `Avg latency to login.microsoftonline.com: ${Math.round(avgTime)}ms (variance: ${Math.round(variance)}ms) ${avgTime > 2000 ? '— HIGH: possible SSL inspection' : '— Normal range'}`
+    });
+
+  } catch (e) {
+    result.findings.push({
+      type: 'critical',
+      msg: `Cannot reach login.microsoftonline.com: ${e.message} — likely blocked or SSL inspection breaking connection`
+    });
+  }
+
+  // Test 3: Check if SecurityPolicy API is available (reports cert info)
+  if (window.SecurityPolicyViolationEvent) {
+    result.findings.push({
+      type: 'info',
+      msg: 'SecurityPolicyViolationEvent supported — CSP violations will be detectable'
+    });
+  }
+
+  result.status = result.findings.some(f => f.type === 'critical') ? 'fail' :
+                  result.findings.some(f => f.type === 'warning') ? 'warn' : 'pass';
+
+  return result;
+}
+
+// Redirect chain test
+async function testRedirectBehavior() {
+  const result = {
+    id: 'redirect-test',
+    name: 'Redirect Chain Test',
+    status: 'pending',
+    findings: []
+  };
+
+  log('Testing redirect chain behavior...', 'info');
+
+  // Test various redirect scenarios
+  const redirectTests = [
+    {
+      name: 'Admin Consent Redirect',
+      url: 'https://login.microsoftonline.com/common/adminconsent?client_id=test&redirect_uri=https://localhost'
+    },
+    {
+      name: 'OAuth Authorize Redirect',
+      url: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=test&response_type=code&redirect_uri=https://localhost&scope=openid'
+    }
+  ];
+
+  for (const test of redirectTests) {
+    try {
+      const start = performance.now();
+      const resp = await fetch(test.url, {
+        redirect: 'manual',
+        mode: 'no-cors',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(10000)
+      });
+      const elapsed = performance.now() - start;
+
+      result.findings.push({
+        type: 'info',
+        msg: `${test.name}: Response type=${resp.type}, status=${resp.status}, time=${Math.round(elapsed)}ms`
+      });
+
+      // opaqueredirect is EXPECTED for manual redirect + no-cors
+      if (resp.type === 'opaqueredirect' || resp.status === 0 || resp.status === 302) {
+        result.findings.push({
+          type: 'info',
+          msg: `${test.name}: Redirect behavior appears normal`
+        });
+      }
+    } catch (e) {
+      result.findings.push({
+        type: 'warning',
+        msg: `${test.name}: ${e.message} — redirect may be blocked`
+      });
+    }
+  }
+
+  result.status = result.findings.some(f => f.type === 'critical') ? 'fail' :
+                  result.findings.some(f => f.type === 'warning') ? 'warn' : 'pass';
+
+  return result;
+}
+
+// WebSocket connectivity test (some firewalls block WS which affects SignalR)
+async function testWebSocket() {
+  return new Promise(resolve => {
+    const result = { id: 'websocket', findings: [] };
+    try {
+      const ws = new WebSocket('wss://login.microsoftonline.com');
+      const timeout = setTimeout(() => {
+        ws.close();
+        result.findings.push({ type: 'info', msg: 'WebSocket connection timed out (normal for this endpoint)' });
+        result.status = 'pass';
+        resolve(result);
+      }, 5000);
+
+      ws.onopen = () => {
+        clearTimeout(timeout);
+        ws.close();
+        result.findings.push({ type: 'info', msg: 'WebSocket connection established' });
+        result.status = 'pass';
+        resolve(result);
+      };
+
+      ws.onerror = (e) => {
+        clearTimeout(timeout);
+        result.findings.push({ type: 'info', msg: 'WebSocket rejected (expected for auth endpoint)' });
+        result.status = 'pass';
+        resolve(result);
+      };
+    } catch (e) {
+      result.findings.push({ type: 'warning', msg: `WebSocket blocked: ${e.message}` });
+      result.status = 'warn';
+      resolve(result);
+    }
+  });
+}
+
+function generateFindings() {
+  const findings = [];
+  const tests = RESULTS.tests;
+
+  // Check for blocked critical endpoints
+  const blockedCritical = tests.filter(t => t.critical && t.status === 'fail');
+  if (blockedCritical.length > 0) {
+    findings.push({
+      type: 'critical',
+      title: 'Critical Endpoints Blocked',
+      msg: `${blockedCritical.length} critical endpoint(s) are unreachable: ${blockedCritical.map(t => t.name).join(', ')}. These are required for Azure AD authentication and OAuth flows. A firewall or proxy is likely blocking these connections.`
+    });
+  }
+
+  // Check for proxy indicators
+  const withProxy = tests.filter(t => t.proxyIndicators && t.proxyIndicators.length > 0);
+  if (withProxy.length > 0) {
+    const allHeaders = withProxy.flatMap(t => t.proxyIndicators.map(p => p.header));
+    const uniqueHeaders = [...new Set(allHeaders)];
+    findings.push({
+      type: 'critical',
+      title: 'Proxy/Firewall Detected in Request Path',
+      msg: `${withProxy.length} endpoint(s) show proxy/firewall headers: ${uniqueHeaders.join(', ')}. This confirms traffic is being intercepted and possibly modified. Request SSL inspection bypass for Microsoft authentication domains.`
+    });
+  }
+
+  // Check for SSL inspection indicators (high latency)
+  const slowEndpoints = tests.filter(t => t.timing > 3000);
+  if (slowEndpoints.length >= 3) {
+    findings.push({
+      type: 'warning',
+      title: 'High Latency Detected — Possible SSL Inspection',
+      msg: `${slowEndpoints.length} endpoints show response times >3000ms. This pattern is consistent with SSL/TLS inspection (decryption + re-encryption adds latency). Endpoints: ${slowEndpoints.map(t => `${t.name} (${t.timing}ms)`).join(', ')}.`
+    });
+  }
+
+  // Check for mixed results (some pass, some fail) - suggests selective filtering
+  const passCount = tests.filter(t => t.status === 'pass').length;
+  const failCount = tests.filter(t => t.status === 'fail').length;
+  if (passCount > 0 && failCount > 0) {
+    findings.push({
+      type: 'warning',
+      title: 'Selective Filtering Detected',
+      msg: `Some endpoints are accessible while others are blocked. This suggests URL-level or domain-level filtering rules rather than a blanket block. The firewall may be allowing general Microsoft traffic but blocking specific OAuth/admin consent URLs.`
+    });
+  }
+
+  // Check OAuth-specific endpoints
+  const oauthTests = tests.filter(t => t.category === 'oauth');
+  const oauthFailed = oauthTests.filter(t => t.status === 'fail');
+  if (oauthFailed.length > 0) {
+    findings.push({
+      type: 'critical',
+      title: 'OAuth Flow Endpoints Blocked',
+      msg: `OAuth-specific endpoints are blocked: ${oauthFailed.map(t => t.name).join(', ')}. This directly prevents the admin consent flow from completing. The token exchange and/or authorization redirect is being intercepted.`
+    });
+  }
+
+  // Check device login specifically
+  const deviceLogin = tests.find(t => t.id === 'device-login');
+  if (deviceLogin && deviceLogin.status === 'fail') {
+    findings.push({
+      type: 'critical',
+      title: 'Device Login Endpoint Blocked',
+      msg: 'device.login.microsoftonline.com is unreachable. This endpoint is specifically required for the device code authentication flow. This is likely the primary cause of the AADSTS50097 error when the device auth fallback fails inside the corporate network.'
+    });
+  }
+
+  // Check body content for firewall pages
+  const firewallPages = tests.filter(t => t.sslIssues && t.sslIssues.some(s => s.includes('firewall') || s.includes('proxy')));
+  if (firewallPages.length > 0) {
+    findings.push({
+      type: 'critical',
+      title: 'Firewall Block Pages Detected',
+      msg: `${firewallPages.length} endpoint(s) returned content containing firewall/proxy block page indicators instead of legitimate Microsoft responses. This confirms the firewall is actively intercepting and blocking these requests.`
+    });
+  }
+
+  // Check for CORS issues
+  const corsIssues = tests.filter(t => t.status === 'fail' && t.details.noCorsReachable === true);
+  if (corsIssues.length > 0) {
+    findings.push({
+      type: 'info',
+      title: 'CORS Restrictions (Expected)',
+      msg: `${corsIssues.length} endpoint(s) are reachable but block browser CORS requests. This is normal behavior for some Microsoft endpoints and not a network issue.`
+    });
+  }
+
+  // All pass
+  if (failCount === 0 && findings.length === 0) {
+    findings.push({
+      type: 'info',
+      title: 'All Endpoints Accessible',
+      msg: 'All Microsoft authentication and API endpoints are reachable from this network. If the OAuth admin consent flow is still failing, the issue may be in Azure AD configuration (Conditional Access policies, Security Defaults, or Protected Actions) rather than network-level blocking.'
+    });
+  }
+
+  // Add SSL inspection test results
+  if (RESULTS.sslTest) {
+    for (const f of RESULTS.sslTest.findings) {
+      findings.push({
+        type: f.type === 'critical' ? 'critical' : f.type === 'warning' ? 'warning' : 'info',
+        title: 'SSL Inspection Analysis',
+        msg: f.msg
+      });
+    }
+  }
+
+  // Add redirect test results
+  if (RESULTS.redirectTest) {
+    for (const f of RESULTS.redirectTest.findings.filter(f => f.type !== 'info')) {
+      findings.push({
+        type: f.type === 'critical' ? 'critical' : 'warning',
+        title: 'Redirect Behavior',
+        msg: f.msg
+      });
+    }
+  }
+
+  RESULTS.findings = findings;
+
+  // Render findings
+  const panel = document.getElementById('findingsPanel');
+  const list = document.getElementById('findingsList');
+  list.innerHTML = '';
+
+  if (findings.length > 0) {
+    panel.classList.add('active');
+    for (const f of findings) {
+      const cls = f.type === 'critical' ? 'finding-critical' : f.type === 'warning' ? 'finding-warning' : 'finding-info';
+      list.innerHTML += `<div class="finding-item ${cls}"><strong>${f.title || ''}</strong>${f.msg}</div>`;
+    }
+  }
+}
+
+async function runAllTests() {
+  const btn = document.getElementById('btnRun');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Running...';
+
+  // Reset
+  document.getElementById('testSections').innerHTML = '';
+  document.getElementById('findingsList').innerHTML = '';
+  document.getElementById('findingsPanel').classList.remove('active');
+  document.getElementById('rawLog').innerHTML = '';
+  RESULTS.tests = [];
+  RESULTS.findings = [];
+  RESULTS.timestamp = new Date().toISOString();
+
+  const totalTests = ENDPOINTS.length + 3; // endpoints + ssl + redirect + websocket
+  let completed = 0;
+
+  document.getElementById('progressContainer').classList.add('active');
+  document.getElementById('summaryGrid').classList.add('active');
+
+  // Phase 1: Environment
+  log('═══ PHASE 1: Environment Collection ═══', 'info');
+  updateProgress(0, totalTests, 'Collecting environment data...');
+  collectEnvironment();
+  await detectPublicIP();
+
+  // Phase 2: Create all sections
+  ENDPOINTS.forEach(ep => createTestSection(ep));
+
+  // Phase 3: Run endpoint tests
+  log('\n═══ PHASE 2: Endpoint Connectivity Tests ═══', 'info');
+
+  for (const endpoint of ENDPOINTS) {
+    updateProgress(completed, totalTests, `Testing ${endpoint.name}...`);
+    const result = await testEndpoint(endpoint);
+    RESULTS.tests.push(result);
+    completed++;
+    updateSummary();
+  }
+
+  // Phase 4: SSL Inspection test
+  log('\n═══ PHASE 3: SSL Inspection Detection ═══', 'info');
+  updateProgress(completed, totalTests, 'Analyzing SSL inspection...');
+  RESULTS.sslTest = await testSSLInspection();
+  completed++;
+
+  // Phase 5: Redirect test
+  log('\n═══ PHASE 4: Redirect Chain Analysis ═══', 'info');
+  updateProgress(completed, totalTests, 'Testing redirect behavior...');
+  RESULTS.redirectTest = await testRedirectBehavior();
+  completed++;
+
+  // Phase 6: WebSocket test
+  log('\n═══ PHASE 5: WebSocket Connectivity ═══', 'info');
+  updateProgress(completed, totalTests, 'Testing WebSocket...');
+  RESULTS.wsTest = await testWebSocket();
+  completed++;
+
+  // Phase 7: Generate findings
+  log('\n═══ PHASE 6: Generating Diagnostic Report ═══', 'info');
+  updateProgress(totalTests, totalTests, 'Complete!');
+  generateFindings();
+
+  // Show export buttons
+  document.getElementById('btnExportJson').style.display = '';
+  document.getElementById('btnExportText').style.display = '';
+  document.getElementById('btnCopy').style.display = '';
+
+  // Auto-expand failed tests
+  RESULTS.tests.filter(t => t.status === 'fail').forEach(t => {
+    document.getElementById(`body-${t.id}`).classList.add('open');
+    document.getElementById(`chev-${t.id}`).classList.add('open');
+  });
+
+  btn.disabled = false;
+  btn.innerHTML = '▶ Run Again';
+
+  log('\n═══ DIAGNOSTIC COMPLETE ═══', 'pass');
+  log(`Summary: ${RESULTS.summary.pass} passed, ${RESULTS.summary.warn} warnings, ${RESULTS.summary.fail} failed`, RESULTS.summary.fail > 0 ? 'fail' : 'pass');
+}
+
+function updateSummary() {
+  const tests = RESULTS.tests;
+  const s = {
+    total: tests.length,
+    pass: tests.filter(t => t.status === 'pass').length,
+    warn: tests.filter(t => t.status === 'warn').length,
+    fail: tests.filter(t => t.status === 'fail').length
+  };
+  RESULTS.summary = s;
+  document.getElementById('sumTotal').textContent = s.total;
+  document.getElementById('sumPass').textContent = s.pass;
+  document.getElementById('sumWarn').textContent = s.warn;
+  document.getElementById('sumFail').textContent = s.fail;
+}
+
+function exportJSON() {
+  const blob = new Blob([JSON.stringify(RESULTS, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `azure-oauth-diag-${new Date().toISOString().slice(0, 16).replace(/:/g, '-')}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function generateTextReport() {
+  let report = '';
+  report += '╔══════════════════════════════════════════════════════════╗\n';
+  report += '║       AZURE OAUTH NETWORK DIAGNOSTIC REPORT            ║\n';
+  report += '╚══════════════════════════════════════════════════════════╝\n\n';
+  report += `Generated: ${RESULTS.timestamp}\n`;
+  report += `Summary: ${RESULTS.summary.pass} PASS | ${RESULTS.summary.warn} WARN | ${RESULTS.summary.fail} FAIL\n\n`;
+
+  report += '── ENVIRONMENT ──────────────────────────────────────────\n';
+  for (const [k, v] of Object.entries(RESULTS.environment)) {
+    report += `  ${k}: ${v}\n`;
+  }
+
+  report += '\n── ENDPOINT TESTS ──────────────────────────────────────\n';
+  for (const t of RESULTS.tests) {
+    const icon = t.status === 'pass' ? '✓' : t.status === 'warn' ? '⚠' : '✕';
+    report += `\n  ${icon} ${t.name} [${t.status.toUpperCase()}]\n`;
+    report += `    URL: ${t.url}\n`;
+    report += `    HTTP: ${t.httpStatus || 'N/A'} | Time: ${t.timing}ms | Redirected: ${t.redirected}\n`;
+    if (t.error) report += `    Error: ${t.error}\n`;
+    if (t.proxyIndicators.length > 0) {
+      report += `    ⚠ Proxy Indicators:\n`;
+      t.proxyIndicators.forEach(p => report += `      ${p.header}: ${p.value}\n`);
+    }
+    if (t.sslIssues.length > 0) {
+      report += `    ⚠ SSL Issues:\n`;
+      t.sslIssues.forEach(s => report += `      ${s}\n`);
+    }
+    if (Object.keys(t.headers).length > 0) {
+      report += `    Response Headers:\n`;
+      for (const [k, v] of Object.entries(t.headers)) {
+        report += `      ${k}: ${v}\n`;
+      }
+    }
+  }
+
+  report += '\n── FINDINGS ────────────────────────────────────────────\n';
+  for (const f of RESULTS.findings) {
+    const icon = f.type === 'critical' ? '🔴' : f.type === 'warning' ? '🟡' : '🔵';
+    report += `\n  ${icon} ${f.title || ''}\n`;
+    report += `    ${f.msg}\n`;
+  }
+
+  report += '\n── END OF REPORT ───────────────────────────────────────\n';
+  return report;
+}
+
+function exportText() {
+  const report = generateTextReport();
+  const blob = new Blob([report], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `azure-oauth-diag-${new Date().toISOString().slice(0, 16).replace(/:/g, '-')}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function copyReport() {
+  const report = generateTextReport();
+  navigator.clipboard.writeText(report).then(() => {
+    const btn = document.getElementById('btnCopy');
+    const orig = btn.innerHTML;
+    btn.innerHTML = '✓ Copied!';
+    setTimeout(() => btn.innerHTML = orig, 2000);
+  });
+}
+</script>
+
+</body>
+</html>
