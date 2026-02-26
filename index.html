@@ -2171,56 +2171,154 @@ async function detectProxyConfiguration() {
   }
 
   // ═══════════════════════════════════════════════════════
-  // CHECK 15: Enterprise Certificate Authority Detection
-  // Managed browsers with MITM have a custom root CA installed.
-  // We can detect this indirectly via managed browser flag + timing.
+  // CHECK 15: MITM Certificate Detection via badssl.com
+  // badssl.com hosts sites with intentionally broken certificates.
+  // Normal browsers REJECT these. If a MITM proxy is active, it
+  // re-signs ALL traffic with its own CA, making broken certs "valid".
+  // If fetch succeeds to these sites → MITM CA is installed.
+  // ═══════════════════════════════════════════════════════
+  try {
+    log('  Probing certificate validation via badssl.com...', 'info');
+
+    const certTests = [
+      {
+        name: 'Expired Certificate',
+        url: 'https://expired.badssl.com/',
+        desc: 'Certificate expired in 2015. Should be REJECTED by any browser.'
+      },
+      {
+        name: 'Wrong Host Certificate',
+        url: 'https://wrong.host.badssl.com/',
+        desc: 'Certificate issued for different hostname. Should be REJECTED.'
+      },
+      {
+        name: 'Self-Signed Certificate',
+        url: 'https://self-signed.badssl.com/',
+        desc: 'Self-signed certificate, not from any CA. Should be REJECTED.'
+      },
+      {
+        name: 'Untrusted Root CA',
+        url: 'https://untrusted-root.badssl.com/',
+        desc: 'Signed by a CA not in any trust store. Should be REJECTED.'
+      },
+      {
+        name: 'Revoked Certificate',
+        url: 'https://revoked.badssl.com/',
+        desc: 'Certificate has been revoked. Should be REJECTED.'
+      }
+    ];
+
+    const certResults = [];
+    let mitmDetected = false;
+
+    for (const test of certTests) {
+      const start = performance.now();
+      try {
+        const resp = await fetch(test.url, {
+          mode: 'no-cors',
+          cache: 'no-store',
+          signal: AbortSignal.timeout(6000)
+        });
+        const elapsed = Math.round(performance.now() - start);
+
+        // If we get here WITHOUT an error, the bad cert was ACCEPTED
+        // no-cors returns opaque response but if fetch doesn't throw, TLS succeeded
+        certResults.push({
+          name: test.name,
+          url: test.url,
+          result: 'ACCEPTED',
+          time: elapsed,
+          type: resp.type,
+          desc: test.desc
+        });
+        mitmDetected = true;
+        log(`    ${test.name}: ACCEPTED (${elapsed}ms) — MITM indicator!`, 'warn');
+      } catch (e) {
+        // Error/rejection is EXPECTED — means browser properly validates certs
+        certResults.push({
+          name: test.name,
+          url: test.url,
+          result: 'REJECTED',
+          error: e.message,
+          desc: test.desc
+        });
+        log(`    ${test.name}: REJECTED ✓ (browser validated cert correctly)`, 'pass');
+      }
+    }
+
+    // Also test a known-good badssl.com to confirm the service is reachable
+    let badsslReachable = false;
+    try {
+      await fetch('https://badssl.com/', { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(5000) });
+      badsslReachable = true;
+    } catch(e) {
+      // badssl.com itself not reachable
+    }
+
+    let detail = '';
+    if (!badsslReachable) {
+      detail = 'badssl.com is not reachable from this network — certificate tests could not run.\nThis may itself indicate network filtering of security testing tools.\n';
+    } else {
+      detail = 'Certificate Validation Tests (via badssl.com):\n\n';
+      const accepted = certResults.filter(r => r.result === 'ACCEPTED');
+      const rejected = certResults.filter(r => r.result === 'REJECTED');
+
+      for (const r of certResults) {
+        if (r.result === 'ACCEPTED') {
+          detail += `  ⚠ ${r.name}: ACCEPTED (${r.time}ms)\n`;
+          detail += `    URL: ${r.url}\n`;
+          detail += `    ${r.desc}\n`;
+          detail += `    ➜ This certificate SHOULD be rejected. A MITM proxy is re-signing with its own CA.\n\n`;
+        } else {
+          detail += `  ✓ ${r.name}: REJECTED (correct behavior)\n`;
+          detail += `    ${r.desc}\n\n`;
+        }
+      }
+
+      if (mitmDetected) {
+        detail += `\n⚠ MITM PROXY CONFIRMED: ${accepted.length} of ${certResults.length} bad certificates were ACCEPTED.\n`;
+        detail += `A corporate proxy/firewall is intercepting ALL TLS traffic and re-signing it\n`;
+        detail += `with an enterprise Certificate Authority installed on this machine.\n`;
+        detail += `This is the definitive proof that SSL inspection is active.\n`;
+      } else {
+        detail += `\nAll ${rejected.length} bad certificates were properly rejected.\n`;
+        detail += `No evidence of TLS interception via certificate re-signing.\n`;
+      }
+    }
+
+    checks.push({
+      name: 'MITM Certificate Probe (badssl.com)',
+      status: mitmDetected ? 'detected' : (badsslReachable ? 'clear' : 'info'),
+      detail: detail
+    });
+
+    RESULTS.proxyDetection.certProbe = { results: certResults, mitmDetected, badsslReachable };
+  } catch (e) {
+    checks.push({ name: 'MITM Certificate Probe (badssl.com)', status: 'error', detail: `Check failed: ${e.message}` });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // CHECK 16: Enterprise CA / Managed Browser Detection
   // ═══════════════════════════════════════════════════════
   try {
     log('  Analyzing enterprise CA indicators...', 'info');
     const caHints = [];
     let caDetected = false;
 
-    // Managed browser is a strong signal
     if (navigator.managed === true) {
       caHints.push('Browser is ENTERPRISE MANAGED — custom root CA is very likely installed for TLS inspection');
       caDetected = true;
     }
 
-    // Check if chrome.enterprise APIs exist (Chrome Enterprise)
     if (window.chrome) {
       if (window.chrome.enterprise) {
-        caHints.push('chrome.enterprise API present — Enterprise-managed Chrome with possible CA injection');
+        caHints.push('chrome.enterprise API present — Enterprise-managed Chrome');
         caDetected = true;
       }
       if (window.chrome.certificateProvider) {
         caHints.push('chrome.certificateProvider API present — Enterprise certificate management active');
         caDetected = true;
       }
-    }
-
-    // Try to detect certificate pinning failure
-    // If we can reach a site with known pins but the pins don't match (MITM), fetch would still succeed
-    // because the custom CA overrides pins. We test by comparing behavior.
-    try {
-      // Google uses certificate pinning — if a MITM proxy is active, the connection
-      // still succeeds because the enterprise CA overrides pins in managed browsers
-      const pinTestStart = performance.now();
-      const pinResp = await fetch('https://www.google.com/generate_204', {
-        mode: 'no-cors',
-        cache: 'no-store',
-        signal: AbortSignal.timeout(5000)
-      });
-      const pinTime = Math.round(performance.now() - pinTestStart);
-      caHints.push(`Pin test (google.com/generate_204): reachable in ${pinTime}ms, type: ${pinResp.type}`);
-
-      // Compare timing to Microsoft endpoint
-      const msTime = RESULTS.proxyDetection.microTiming ? RESULTS.proxyDetection.microTiming.median : null;
-      if (msTime && pinTime > 0) {
-        const ratio = pinTime / msTime;
-        caHints.push(`Google/Microsoft timing ratio: ${ratio.toFixed(2)} (values close to 1.0 suggest same network path)`);
-      }
-    } catch(e) {
-      caHints.push(`Pin test failed: ${e.message}`);
     }
 
     checks.push({
@@ -2231,6 +2329,106 @@ async function detectProxyConfiguration() {
     log(`  Enterprise CA: ${caDetected ? 'indicators found' : 'not detected'}`, caDetected ? 'warn' : 'pass');
   } catch (e) {
     checks.push({ name: 'Enterprise CA / Managed Browser', status: 'info', detail: `Check failed: ${e.message}` });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // CHECK 17: Certificate Store Dump (generates commands)
+  // JavaScript cannot read the certificate store directly,
+  // but we can generate OS-specific commands and show them
+  // so the user or IT can run them to get the actual CA names.
+  // ═══════════════════════════════════════════════════════
+  try {
+    log('  Generating certificate store inspection commands...', 'info');
+    const isWindows = navigator.platform === 'Win32' || navigator.userAgent.includes('Windows');
+    const isMac = navigator.platform === 'MacIntel' || navigator.userAgent.includes('Macintosh');
+    const isLinux = navigator.userAgent.includes('Linux') && !navigator.userAgent.includes('Android');
+
+    let detail = 'JavaScript cannot directly read the OS certificate store.\n';
+    detail += 'Run one of these commands to list installed CA certificates:\n\n';
+
+    if (isWindows) {
+      detail += '═══ WINDOWS — PowerShell (Run as Administrator) ═══\n\n';
+
+      detail += '# List ALL Root CA certificates (Trusted Root Certification Authorities):\n';
+      detail += 'Get-ChildItem Cert:\\LocalMachine\\Root | Format-Table Subject, Issuer, NotAfter, Thumbprint -AutoSize\n\n';
+
+      detail += '# List only NON-MICROSOFT Root CAs (most likely enterprise/proxy CAs):\n';
+      detail += 'Get-ChildItem Cert:\\LocalMachine\\Root | Where-Object { $_.Subject -notlike "*Microsoft*" -and $_.Subject -notlike "*DigiCert*" -and $_.Subject -notlike "*VeriSign*" -and $_.Subject -notlike "*Comodo*" -and $_.Subject -notlike "*GlobalSign*" -and $_.Subject -notlike "*GeoTrust*" -and $_.Subject -notlike "*thawte*" -and $_.Subject -notlike "*Entrust*" -and $_.Subject -notlike "*Baltimore*" -and $_.Subject -notlike "*USERTrust*" -and $_.Subject -notlike "*Symantec*" -and $_.Subject -notlike "*Starfield*" -and $_.Subject -notlike "*Amazon*" -and $_.Subject -notlike "*Sectigo*" -and $_.Subject -notlike "*ISRG*" -and $_.Subject -notlike "*Google*" -and $_.Subject -notlike "*Certum*" -and $_.Subject -notlike "*QuoVadis*" -and $_.Subject -notlike "*AAA Certificate*" } | Format-Table Subject, NotAfter, Thumbprint -AutoSize\n\n';
+
+      detail += '# List certificates added by Group Policy (enterprise deployed):\n';
+      detail += 'Get-ChildItem Cert:\\LocalMachine\\Root | Where-Object { (Get-ItemProperty -Path "HKLM:\\SOFTWARE\\Microsoft\\SystemCertificates\\Root\\Certificates\\$($_.Thumbprint)" -ErrorAction SilentlyContinue) } | Format-Table Subject, Issuer, NotAfter -AutoSize\n\n';
+
+      detail += '# Quick one-liner to find PROXY/FIREWALL CAs:\n';
+      detail += 'Get-ChildItem Cert:\\LocalMachine\\Root | Where-Object { $_.Subject -match "Zscaler|BlueCoat|Fortinet|FortiGate|Palo Alto|Symantec Web|Barracuda|Sophos|McAfee|Netskope|Cisco Umbrella|Websense|CheckPoint|WatchGuard|SonicWall|Untangle|pfSense|Squid|MITM|Proxy|Inspect|Intercept|SSL Visibility|Deep Inspection" } | Format-Table Subject, NotAfter, Thumbprint\n\n';
+
+      detail += '# Export all Root CAs to a text file for sharing:\n';
+      detail += 'Get-ChildItem Cert:\\LocalMachine\\Root | Select-Object Subject, Issuer, NotBefore, NotAfter, Thumbprint | Export-Csv -Path "$env:USERPROFILE\\Desktop\\RootCAs.csv" -NoTypeInformation\n\n';
+
+      detail += '# Also check the CURRENT USER store:\n';
+      detail += 'Get-ChildItem Cert:\\CurrentUser\\Root | Format-Table Subject, Issuer, NotAfter, Thumbprint -AutoSize\n';
+    }
+
+    if (isMac) {
+      detail += '═══ macOS — Terminal ═══\n\n';
+
+      detail += '# List all trusted Root CAs in the System keychain:\n';
+      detail += 'security find-certificate -a -p /Library/Keychains/System.keychain | openssl x509 -noout -subject -issuer -dates 2>/dev/null\n\n';
+
+      detail += '# List Root CAs in System Roots (Apple built-in):\n';
+      detail += 'security find-certificate -a -p /System/Library/Keychains/SystemRootCertificates.keychain | openssl x509 -noout -subject 2>/dev/null\n\n';
+
+      detail += '# List ONLY admin/MDM-added certificates (non-Apple):\n';
+      detail += 'security find-certificate -a -p /Library/Keychains/System.keychain | openssl x509 -noout -subject -issuer 2>/dev/null | grep -v "Apple" | grep -v "DigiCert" | grep -v "VeriSign"\n\n';
+
+      detail += '# Check for MDM profiles that install certificates:\n';
+      detail += 'sudo profiles list -verbose\n';
+    }
+
+    if (isLinux) {
+      detail += '═══ LINUX — Terminal ═══\n\n';
+
+      detail += '# List all trusted CA certificates:\n';
+      detail += 'awk -v cmd=\'openssl x509 -noout -subject\' \'/BEGIN/{close(cmd)};{print | cmd}\' < /etc/ssl/certs/ca-certificates.crt\n\n';
+
+      detail += '# List non-standard CAs (added by admin):\n';
+      detail += 'ls -la /usr/local/share/ca-certificates/\n\n';
+
+      detail += '# Check for proxy CAs:\n';
+      detail += 'trust list | grep -A2 -i "proxy\\|zscaler\\|fortinet\\|bluecoat\\|palo.alto"\n';
+    }
+
+    detail += '\n\n═══ CHROME BROWSER — Quick Check ═══\n\n';
+    detail += '# Open Chrome certificate viewer:\n';
+    detail += '  1. Navigate to: chrome://settings/security\n';
+    detail += '  2. Click "Manage device certificates"\n';
+    detail += '  3. Check "Trusted Root Certification Authorities" tab\n';
+    detail += '  4. Look for any unfamiliar or company-specific CA names\n\n';
+
+    detail += '# Or directly: chrome://certificate-manager (Chrome 125+)\n';
+
+    detail += '\n\n═══ COMMON PROXY CA NAMES TO LOOK FOR ═══\n\n';
+    detail += '  Zscaler Root CA, Zscaler Intermediate Root CA\n';
+    detail += '  Blue Coat Systems, Symantec Web Security\n';
+    detail += '  Fortinet CA, FortiGate CA, Deep Inspection CA\n';
+    detail += '  Palo Alto Networks, PAN-CA\n';
+    detail += '  Barracuda Networks, Barracuda Web Filter CA\n';
+    detail += '  Sophos UTM CA, Sophos XG CA\n';
+    detail += '  McAfee Web Gateway CA\n';
+    detail += '  Netskope Root CA, Netskope Security Cloud\n';
+    detail += '  Cisco Umbrella Root CA\n';
+    detail += '  Check Point SSL Network Extender\n';
+    detail += '  WatchGuard Technologies, Firebox CA\n';
+    detail += '  SonicWall DPI-SSL CA\n';
+    detail += '  Websense Content Gateway CA\n';
+    detail += '  Any CA name matching your company name\n';
+
+    checks.push({
+      name: 'Certificate Store Inspection Commands',
+      status: 'info',
+      detail: detail
+    });
+  } catch (e) {
+    checks.push({ name: 'Certificate Store Inspection Commands', status: 'info', detail: `Could not generate commands: ${e.message}` });
   }
 
   // ═══════════════════════════════════════════════════════
@@ -3230,6 +3428,17 @@ function generateFindings() {
         type: 'critical',
         title: 'Response Content Tampering Detected',
         msg: 'Microsoft endpoint responses show signs of modification — content injection, structural changes, or inconsistency between fetches. This indicates an active proxy is altering Azure AD responses, which will break OAuth token exchange and admin consent flows.'
+      });
+    }
+
+    // MITM Certificate Probe (badssl.com)
+    const certProbeCheck = pd.checks.find(c => c.name === 'MITM Certificate Probe (badssl.com)' && c.status === 'detected');
+    if (certProbeCheck) {
+      const accepted = pd.certProbe ? pd.certProbe.results.filter(r => r.result === 'ACCEPTED').map(r => r.name) : [];
+      findings.push({
+        type: 'critical',
+        title: 'MITM SSL Interception CONFIRMED — Enterprise CA Installed',
+        msg: `The browser accepted ${accepted.length} intentionally invalid certificates (${accepted.join(', ')}). This is definitive proof that a corporate proxy is intercepting ALL TLS traffic by re-signing it with an enterprise Certificate Authority installed on this machine. This will break OAuth token exchange for Azure AD admin consent. See the "Certificate Store Inspection Commands" section to identify the exact CA name, then request IT to add Microsoft authentication domains to the SSL inspection bypass list.`
       });
     }
   }
