@@ -1824,152 +1824,177 @@ async function detectProxyConfiguration() {
   }
 
   // ═══════════════════════════════════════════════════════
-  // CHECK 11: Microsoft Security Headers Stripping
-  // Microsoft endpoints return specific security headers (HSTS, etc).
-  // MITM proxies sometimes strip or modify these.
+  // CHECK 11: Microsoft Response Header Analysis
+  // Check what headers ARE visible (CORS limits visibility).
+  // Compare header count and look for proxy-injected headers.
+  // Note: HSTS, X-Frame-Options, etc. are hidden by CORS by default.
   // ═══════════════════════════════════════════════════════
   try {
-    log('  Checking for security header stripping...', 'info');
+    log('  Analyzing response headers...', 'info');
     const secResp = await fetch('https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration', {
       cache: 'no-store',
       signal: AbortSignal.timeout(8000)
     });
 
-    const expectedHeaders = {
-      'strict-transport-security': { required: true, desc: 'HSTS — should be present on all Microsoft auth endpoints' },
-      'x-content-type-options': { required: false, desc: 'Prevents MIME sniffing' },
-      'x-frame-options': { required: false, desc: 'Clickjacking protection' },
-    };
-
-    const foundSec = {};
-    const missingSec = [];
     const allHeaders = {};
-
     secResp.headers.forEach((val, key) => {
       allHeaders[key.toLowerCase()] = val;
     });
 
-    let detail = 'Response headers from login.microsoftonline.com:\n';
-    for (const [h, info] of Object.entries(expectedHeaders)) {
-      if (allHeaders[h]) {
-        foundSec[h] = allHeaders[h];
-        detail += `  ✓ ${h}: ${allHeaders[h]}\n`;
-      } else {
-        missingSec.push(h);
-        detail += `  ✕ ${h}: MISSING ${info.required ? '⚠ CRITICAL' : ''} — ${info.desc}\n`;
-      }
-    }
+    const headerCount = Object.keys(allHeaders).length;
+    const issues = [];
 
-    // Check HSTS specifically — it's the most important
-    const hsts = allHeaders['strict-transport-security'];
-    let hstsIssue = false;
-    if (!hsts) {
-      hstsIssue = true;
-      detail += '\n⚠ HSTS header is MISSING. Microsoft always sends this. A MITM proxy is very likely stripping it.';
-    } else {
-      const maxAge = hsts.match(/max-age=(\d+)/);
-      if (maxAge && parseInt(maxAge[1]) < 300) {
-        hstsIssue = true;
-        detail += `\n⚠ HSTS max-age is very low (${maxAge[1]}s). Microsoft typically uses much higher values. This may be modified by a proxy.`;
-      }
-    }
-
-    // Check for unexpected headers that proxies sometimes add
-    const suspiciousAdded = [];
-    for (const [k, v] of Object.entries(allHeaders)) {
-      if (k === 'x-cdn' || k === 'x-served-by' || k === 'x-timer' ||
-          k === 'x-proxy-cache' || k === 'x-varnish' || k === 'x-aspnet-version' ||
-          k === 'server' && !v.toLowerCase().includes('microsoft')) {
-        suspiciousAdded.push(`${k}: ${v}`);
-      }
-    }
-
-    if (suspiciousAdded.length > 0) {
-      detail += '\n\n⚠ Unexpected headers found (may be injected by proxy):\n  ' + suspiciousAdded.join('\n  ');
-    }
-
-    // Log ALL headers for forensic comparison
-    detail += '\n\nAll response headers (' + Object.keys(allHeaders).length + '):\n';
+    let detail = `CORS-visible response headers from login.microsoftonline.com (${headerCount}):\n`;
     for (const [k, v] of Object.entries(allHeaders)) {
       detail += `  ${k}: ${v}\n`;
     }
 
-    const headerIssues = hstsIssue || suspiciousAdded.length > 0;
+    // CORS only exposes: cache-control, content-language, content-length, content-type, expires, pragma
+    // Plus any headers the server explicitly exposes via Access-Control-Expose-Headers.
+    // NOTE: HSTS, X-Frame-Options, X-Content-Type-Options are NOT visible via CORS.
+    // Their absence does NOT indicate stripping — this is normal browser behavior.
+    detail += `\nNote: Browsers hide most headers from cross-origin JavaScript (CORS policy).\n`;
+    detail += `Headers like Strict-Transport-Security, X-Frame-Options are sent by Microsoft\n`;
+    detail += `but are invisible to this diagnostic. Their absence here is NORMAL.\n`;
+
+    // What we CAN check: unexpected headers that a proxy might ADD
+    const suspiciousAdded = [];
+    for (const [k, v] of Object.entries(allHeaders)) {
+      const kl = k.toLowerCase();
+      // These are NOT standard Microsoft headers and would indicate proxy injection
+      if (kl === 'x-cdn' || kl === 'x-served-by' || kl === 'x-timer' ||
+          kl === 'x-proxy-cache' || kl === 'x-varnish' || kl === 'x-aspnet-version' ||
+          kl === 'via' || kl === 'x-forwarded-for' || kl === 'x-forwarded-proto' ||
+          (kl === 'server' && !v.toLowerCase().includes('microsoft'))) {
+        suspiciousAdded.push(`${k}: ${v}`);
+        issues.push(`Unexpected header "${k}: ${v}" — may be injected by proxy`);
+      }
+    }
+
+    // Check header count — Microsoft's OIDC endpoint typically exposes 3-5 CORS-visible headers.
+    // Significantly MORE headers visible than expected may mean the server (or proxy) set
+    // Access-Control-Expose-Headers broadly, which proxies sometimes do.
+    if (headerCount > 10) {
+      issues.push(`${headerCount} headers visible (normally 3-5 via CORS) — server or proxy may be exposing extra headers via Access-Control-Expose-Headers`);
+    }
+
+    if (suspiciousAdded.length > 0) {
+      detail += '\n⚠ Unexpected headers found (may be injected by proxy):\n  ' + suspiciousAdded.join('\n  ');
+    }
 
     checks.push({
-      name: 'Security Header Stripping Detection',
-      status: headerIssues ? 'detected' : (missingSec.length > 0 ? 'detected' : 'clear'),
+      name: 'Response Header Analysis',
+      status: issues.length > 0 ? 'detected' : 'clear',
       detail: detail
     });
 
-    RESULTS.proxyDetection.securityHeaders = { found: foundSec, missing: missingSec, all: allHeaders };
-    log(`  Security headers: ${Object.keys(foundSec).length} found, ${missingSec.length} missing${hstsIssue ? ' — HSTS ISSUE' : ''}`, headerIssues ? 'warn' : 'pass');
+    RESULTS.proxyDetection.securityHeaders = { headers: allHeaders, headerCount, issues };
+    log(`  Headers: ${headerCount} visible, ${issues.length} anomalies`, issues.length > 0 ? 'warn' : 'pass');
   } catch (e) {
-    checks.push({ name: 'Security Header Stripping Detection', status: 'error', detail: `Check failed: ${e.message}` });
+    checks.push({ name: 'Response Header Analysis', status: 'error', detail: `Check failed: ${e.message}` });
   }
 
   // ═══════════════════════════════════════════════════════
-  // CHECK 12: Compression Re-encoding Detection
-  // MITM proxies decompress server response, inspect it, then recompress.
-  // This changes Content-Length and transfer characteristics.
+  // CHECK 12: Response Content Comparison
+  // Fetch same endpoint twice and compare — content should be identical.
+  // If a proxy modifies responses, consecutive fetches may differ,
+  // or injected content (tracking pixels, scripts) may appear.
+  // NOTE: Content-Encoding header is hidden by CORS, and browsers
+  // auto-decompress gzip, so we can't detect compression changes.
   // ═══════════════════════════════════════════════════════
   try {
-    log('  Testing compression re-encoding...', 'info');
+    log('  Comparing consecutive responses for content integrity...', 'info');
 
-    // Fetch with explicit gzip
-    const gzipResp = await fetch('https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration', {
-      cache: 'no-store',
-      headers: { 'Accept-Encoding': 'gzip' },
-      signal: AbortSignal.timeout(8000)
-    });
-    const gzipBody = await gzipResp.text();
-    const gzipContentLength = gzipResp.headers.get('content-length');
-    const gzipContentEncoding = gzipResp.headers.get('content-encoding');
+    const url = 'https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration';
 
-    // Fetch with identity (no compression)
-    const plainResp = await fetch('https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration', {
-      cache: 'no-store',
-      headers: { 'Accept-Encoding': 'identity' },
-      signal: AbortSignal.timeout(8000)
-    });
-    const plainBody = await plainResp.text();
-    const plainContentLength = plainResp.headers.get('content-length');
-    const plainContentEncoding = plainResp.headers.get('content-encoding');
+    const resp1 = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+    const body1 = await resp1.text();
+    const headers1 = {};
+    resp1.headers.forEach((v, k) => { headers1[k] = v; });
+
+    // Small delay
+    await new Promise(r => setTimeout(r, 200));
+
+    const resp2 = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+    const body2 = await resp2.text();
+    const headers2 = {};
+    resp2.headers.forEach((v, k) => { headers2[k] = v; });
 
     const issues = [];
-    let detail = `With Accept-Encoding: gzip:\n`;
-    detail += `  Content-Encoding: ${gzipContentEncoding || 'none'}\n`;
-    detail += `  Content-Length: ${gzipContentLength || 'not set'}\n`;
-    detail += `  Body length (decoded): ${gzipBody.length}\n`;
-    detail += `\nWith Accept-Encoding: identity:\n`;
-    detail += `  Content-Encoding: ${plainContentEncoding || 'none'}\n`;
-    detail += `  Content-Length: ${plainContentLength || 'not set'}\n`;
-    detail += `  Body length: ${plainBody.length}\n`;
+    let detail = '';
 
-    // Bodies should be identical when decoded
-    if (gzipBody !== plainBody) {
-      issues.push('Response body DIFFERS between gzip and identity requests — proxy may be modifying content');
+    // Compare bodies
+    if (body1 === body2) {
+      detail += `Fetch 1: ${body1.length} bytes | Fetch 2: ${body2.length} bytes\n`;
+      detail += `Bodies: IDENTICAL ✓\n`;
+    } else {
+      detail += `Fetch 1: ${body1.length} bytes | Fetch 2: ${body2.length} bytes\n`;
+      detail += `Bodies: DIFFERENT ⚠\n`;
+      issues.push(`Response body changed between consecutive fetches (${body1.length} vs ${body2.length} bytes) — proxy may be injecting variable content`);
+
+      // Find first difference
+      for (let i = 0; i < Math.min(body1.length, body2.length); i++) {
+        if (body1[i] !== body2[i]) {
+          detail += `First difference at byte ${i}: "${body1.substring(i, i+30)}..." vs "${body2.substring(i, i+30)}..."\n`;
+          break;
+        }
+      }
     }
 
-    // If both return same Content-Length regardless of encoding, proxy is decompressing
-    if (gzipContentLength && plainContentLength && gzipContentLength === plainContentLength && !gzipContentEncoding) {
-      issues.push('Same Content-Length for both encodings with no Content-Encoding header — proxy likely decompresses transparently');
+    // Compare header sets
+    const keys1 = Object.keys(headers1).sort().join(',');
+    const keys2 = Object.keys(headers2).sort().join(',');
+    if (keys1 !== keys2) {
+      issues.push('Response header set changed between fetches — unstable proxy behavior');
+      detail += `\nHeaders fetch 1: ${Object.keys(headers1).join(', ')}\n`;
+      detail += `Headers fetch 2: ${Object.keys(headers2).join(', ')}\n`;
+    } else {
+      detail += `Header set: consistent across fetches (${Object.keys(headers1).length} headers)\n`;
+    }
+
+    // Check for injected content in the body
+    const lower = body1.toLowerCase();
+    if (lower.includes('<scr' + 'ipt') || lower.includes('<ifr' + 'ame') || lower.includes('<img ') || lower.includes('tracking')) {
+      issues.push('Response body contains HTML/script/tracking elements — content injection detected');
+    }
+
+    // Validate JSON structure is clean
+    try {
+      const json = JSON.parse(body1);
+      // Check for unexpected top-level keys that Microsoft wouldn't include
+      const expectedKeys = ['token_endpoint', 'authorization_endpoint', 'issuer', 'jwks_uri',
+        'response_modes_supported', 'subject_types_supported', 'id_token_signing_alg_values_supported',
+        'response_types_supported', 'scopes_supported', 'token_endpoint_auth_methods_supported',
+        'claims_supported', 'request_uri_parameter_supported', 'userinfo_endpoint',
+        'device_authorization_endpoint', 'end_session_endpoint', 'frontchannel_logout_supported',
+        'kerberos_endpoint', 'tenant_region_scope', 'cloud_instance_name', 'cloud_graph_host_name',
+        'msgraph_host', 'rbac_url'];
+      const actualKeys = Object.keys(json);
+      const unexpectedKeys = actualKeys.filter(k => !expectedKeys.includes(k));
+      if (unexpectedKeys.length > 0) {
+        issues.push(`Unexpected JSON keys in OpenID config: ${unexpectedKeys.join(', ')} — possible proxy injection`);
+        detail += `\n⚠ Unexpected keys: ${unexpectedKeys.join(', ')}\n`;
+      } else {
+        detail += `JSON structure: ${actualKeys.length} keys, all expected ✓\n`;
+      }
+    } catch(e) {
+      issues.push(`Response is not valid JSON: ${e.message}`);
     }
 
     if (issues.length > 0) {
       detail += '\n⚠ ' + issues.join('\n⚠ ');
     } else {
-      detail += '\nCompression behavior appears consistent.';
+      detail += '\nResponses are consistent and unmodified.';
     }
 
     checks.push({
-      name: 'Compression Re-encoding Detection',
+      name: 'Response Content Integrity',
       status: issues.length > 0 ? 'detected' : 'clear',
       detail: detail
     });
-    log(`  Compression: ${issues.length} anomalies`, issues.length > 0 ? 'warn' : 'pass');
+    log(`  Content integrity: ${issues.length} anomalies`, issues.length > 0 ? 'warn' : 'pass');
   } catch (e) {
-    checks.push({ name: 'Compression Re-encoding Detection', status: 'error', detail: `Check failed: ${e.message}` });
+    checks.push({ name: 'Response Content Integrity', status: 'error', detail: `Check failed: ${e.message}` });
   }
 
   // ═══════════════════════════════════════════════════════
@@ -3197,13 +3222,14 @@ function generateFindings() {
       });
     }
 
-    // Body integrity issues
+    // Body integrity / content injection issues
     const integrityCheck = pd.checks.find(c => c.name === 'Response Body Integrity' && c.status === 'detected');
-    if (integrityCheck) {
+    const contentCheck = pd.checks.find(c => c.name === 'Response Content Integrity' && c.status === 'detected');
+    if (integrityCheck || contentCheck) {
       findings.push({
         type: 'critical',
-        title: 'Response Body Tampering Detected',
-        msg: 'The OpenID Configuration response from Microsoft has been modified or replaced. This means a proxy or firewall is actively altering Azure AD responses, which will break OAuth token exchange and admin consent flows.'
+        title: 'Response Content Tampering Detected',
+        msg: 'Microsoft endpoint responses show signs of modification — content injection, structural changes, or inconsistency between fetches. This indicates an active proxy is altering Azure AD responses, which will break OAuth token exchange and admin consent flows.'
       });
     }
   }
